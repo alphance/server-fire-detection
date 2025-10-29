@@ -7,7 +7,6 @@ import pygame
 import os
 
 # --- Pygame Setup ---
-# We need to initialize the font module
 pygame.init()
 pygame.font.init()
 
@@ -18,8 +17,6 @@ SCREEN_WIDTH = SENSOR_WIDTH * SCALE_FACTOR
 SCREEN_HEIGHT = SENSOR_HEIGHT * SCALE_FACTOR
 
 # --- Font and Text Setup ---
-# Create a font object. We use 'monospace' so '1' and '8' take same width.
-# The size (18) is small enough to fit in our 20x20 boxes.
 try:
     FONT_SIZE = 18
     font = pygame.font.SysFont('monospace', FONT_SIZE, bold=True)
@@ -27,7 +24,6 @@ except Exception as e:
     print(f"Warning: Could not load monospace font. Using default. Error: {e}")
     font = pygame.font.Font(None, FONT_SIZE)
 
-# Define text colors for high and low contrast
 TEXT_WHITE = (255, 255, 255)
 TEXT_BLACK = (0, 0, 0)
 # --------------------
@@ -73,6 +69,11 @@ while running:
     except ValueError:
         continue # skip this frame
 
+    # --- THIS IS THE FIX ---
+    # Clear the entire screen with black before drawing anything
+    screen.fill((0, 0, 0))
+    # ----------------------
+
     # --- Draw the thermal image (as background) ---
     temp_min_frame = np.min(frame)
     temp_max_frame = np.max(frame)
@@ -95,15 +96,12 @@ while running:
     # Draw the scaled image to the screen
     screen.blit(scaled_surface, (0, 0))
 
-    # --- NEW: Draw the text overlay ---
+    # --- Draw the text overlay ---
     for y in range(SENSOR_HEIGHT):
         for x in range(SENSOR_WIDTH):
             temp = frame[y * SENSOR_WIDTH + x]
             
             # --- Dynamic Text Color ---
-            # Decide text color based on the temperature (norm)
-            # Hotter temps (norm > 0.6, e.g., red/yellow) get BLACK text
-            # Colder temps (norm <= 0.6, e.g., blue/purple) get WHITE text
             norm = (temp - temp_min_frame) / (temp_max_frame - temp_min_frame + 0.001)
             text_color = TEXT_BLACK if norm > 0.6 else TEXT_WHITE
             
