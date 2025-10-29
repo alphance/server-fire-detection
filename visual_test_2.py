@@ -4,10 +4,12 @@ import busio
 import adafruit_mlx90640
 import numpy as np
 import pygame
-import os # We'll use this to clear the terminal
+import os
 
 # --- Pygame Setup ---
+# We need to initialize the font module
 pygame.init()
+pygame.font.init()
 
 SENSOR_WIDTH = 32
 SENSOR_HEIGHT = 24
@@ -15,10 +17,26 @@ SCALE_FACTOR = 20
 SCREEN_WIDTH = SENSOR_WIDTH * SCALE_FACTOR
 SCREEN_HEIGHT = SENSOR_HEIGHT * SCALE_FACTOR
 
+# --- Font and Text Setup ---
+# Create a font object. We use 'monospace' so '1' and '8' take same width.
+# The size (18) is small enough to fit in our 20x20 boxes.
+try:
+    FONT_SIZE = 18
+    font = pygame.font.SysFont('monospace', FONT_SIZE, bold=True)
+except Exception as e:
+    print(f"Warning: Could not load monospace font. Using default. Error: {e}")
+    font = pygame.font.Font(None, FONT_SIZE)
+
+# Define text colors for high and low contrast
+TEXT_WHITE = (255, 255, 255)
+TEXT_BLACK = (0, 0, 0)
+# --------------------
+
+# Create the display
 try:
     screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
-    pygame.display.set_caption("MLX90640 Thermal Camera Feed")
-    print("Pygame window created. Check your terminal for raw data.")
+    pygame.display.set_caption("MLX90640 Thermal Camera Feed (with Text)")
+    print("Pygame window created. Displaying visual feed with text overlay.")
 except pygame.error as e:
     print(f"Error initializing pygame display: {e}")
     exit()
@@ -32,9 +50,10 @@ try:
     mlx = adafruit_mlx90640.MLX90640(i2c)
     mlx.refresh_rate = adafruit_mlx90640.RefreshRate.REFRESH_4_HZ
     frame = [0] * (SENSOR_WIDTH * SENSOR_HEIGHT)
-    print("MLX90640 sensor initialized")
+    print("MLX90640 sensor initialized. Starting feed...")
 except Exception as e:
     print(f"Error initializing MLX90640: {e}")
+    pygame.font.quit()
     pygame.quit()
     exit()
 # ---------------------------
@@ -54,7 +73,7 @@ while running:
     except ValueError:
         continue # skip this frame
 
-    # --- Draw the thermal image (in Pygame window) ---
+    # --- Draw the thermal image (as background) ---
     temp_min_frame = np.min(frame)
     temp_max_frame = np.max(frame)
 
@@ -62,6 +81,7 @@ while running:
     for y in range(SENSOR_HEIGHT):
         for x in range(SENSOR_WIDTH):
             temp = frame[y * SENSOR_WIDTH + x]
+            # Normalize temp for color mapping
             norm = (temp - temp_min_frame) / (temp_max_frame - temp_min_frame + 0.001)
             norm = max(0.0, min(1.0, norm))
             red = int(255 * norm)
@@ -70,35 +90,42 @@ while running:
             thermal_surface.set_at((x, y), (red, green, blue))
     thermal_surface.unlock()
 
+    # Scale the 32x24 surface up to our big 640x480 screen
     scaled_surface = pygame.transform.scale(thermal_surface, (SCREEN_WIDTH, SCREEN_HEIGHT))
+    # Draw the scaled image to the screen
     screen.blit(scaled_surface, (0, 0))
-    pygame.display.flip()
-    
-    # --- NEW: Print the raw data (in Terminal window) ---
-    
-    # This ANSI escape code clears the terminal screen
-    # \033[H moves cursor to top-left, \033[J clears from cursor down
-    print("\033[H\033[J", end="")
-    
-    print("--- 32x24 Raw Thermal Array (Degrees C) ---")
-    output_str = ""
+
+    # --- NEW: Draw the text overlay ---
     for y in range(SENSOR_HEIGHT):
-        row = []
         for x in range(SENSOR_WIDTH):
             temp = frame[y * SENSOR_WIDTH + x]
-            # Format to 4 chars total, 1 decimal place (e.g., " 23.4" or "-10.2")
-            row.append(f"{temp: 4.1f}") 
-        output_str += " | ".join(row) + "\n"
-        
-    print(output_str)
-    print("-" * (32 * 7)) # Separator line
-    print(f"Frame Min: {temp_min_frame:0.2f}C   Max: {temp_max_frame:0.2f}C   Refresh: {mlx.refresh_rate}Hz")
-    print("Press ESC or close the Pygame window to stop.")
-    
-    # A short delay so the terminal is readable and we don't overwhelm it
-    time.sleep(0.01)
+            
+            # --- Dynamic Text Color ---
+            # Decide text color based on the temperature (norm)
+            # Hotter temps (norm > 0.6, e.g., red/yellow) get BLACK text
+            # Colder temps (norm <= 0.6, e.g., blue/purple) get WHITE text
+            norm = (temp - temp_min_frame) / (temp_max_frame - temp_min_frame + 0.001)
+            text_color = TEXT_BLACK if norm > 0.6 else TEXT_WHITE
+            
+            # Create the text string (rounded to integer)
+            text_str = f"{temp:0.0f}"
+            
+            # Render the text
+            text_surf = font.render(text_str, True, text_color)
+            
+            # Get the text rectangle and center it in the 20x20 box
+            text_rect = text_surf.get_rect()
+            text_rect.center = (x * SCALE_FACTOR + (SCALE_FACTOR // 2), 
+                                y * SCALE_FACTOR + (SCALE_FACTOR // 2))
+            
+            # Draw the text onto the screen
+            screen.blit(text_surf, text_rect)
+
+    # Update the full display
+    pygame.display.flip()
 
 # --- End of Loop ---
+pygame.font.quit()
 pygame.quit()
 print("Pygame window closed. Exiting.")
 
