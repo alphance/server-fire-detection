@@ -19,10 +19,13 @@ SCREEN_HEIGHT = SENSOR_HEIGHT * SCALE_FACTOR
 # --- Font and Text Setup ---
 try:
     FONT_SIZE = 18
-    font = pygame.font.SysFont('monospace', FONT_SIZE, bold=True)
-except Exception as e:
-    print(f"Warning: Could not load monospace font. Using default. Error: {e}")
+    # --- CHANGE 1: Forcing the default font to try and fix the smearing bug
     font = pygame.font.Font(None, FONT_SIZE)
+    print("Using default pygame font.")
+except Exception as e:
+    print(f"Warning: Could not load default font. Error: {e}")
+    # Fallback in case 'None' fails
+    font = pygame.font.SysFont('monospace', FONT_SIZE, bold=True)
 
 TEXT_WHITE = (255, 255, 255)
 TEXT_BLACK = (0, 0, 0)
@@ -37,10 +40,6 @@ except pygame.error as e:
     print(f"Error initializing pygame display: {e}")
     exit()
 
-# --- REMOVED THE INTERMEDIATE SURFACES ---
-# thermal_surface = pygame.Surface((SENSOR_WIDTH, SENSOR_HEIGHT))
-# --------------------
-
 # --- MLX90640 Sensor Setup ---
 try:
     i2c = busio.I2C(board.SCL, board.SDA, frequency=800000)
@@ -54,6 +53,33 @@ except Exception as e:
     pygame.quit()
     exit()
 # ---------------------------
+
+# --- CHANGE 2: Better "Heatmap" Color Function ---
+def get_heatmap_color(norm_temp):
+    """Maps a normalized value (0.0 to 1.0) to a BGYR heatmap color."""
+    # Ensure norm_temp is clipped
+    norm_temp = max(0.0, min(1.0, norm_temp))
+    
+    r, g, b = 0, 0, 0
+    
+    if norm_temp < 0.25:
+        # Blue to Green
+        g = int(255 * (norm_temp / 0.25))
+        b = int(255 * (1.0 - (norm_temp / 0.25)))
+    elif norm_temp < 0.5:
+        # Green to Yellow
+        r = int(255 * ((norm_temp - 0.25) / 0.25))
+        g = 255
+    elif norm_temp < 0.75:
+        # Yellow to Red
+        r = 255
+        g = int(255 * (1.0 - ((norm_temp - 0.5) / 0.25)))
+    else:
+        # Red
+        r = 255
+        
+    return (r, g, b)
+# -----------------------------------------------
 
 # --- Main Loop ---
 running = True
@@ -74,8 +100,6 @@ while running:
     screen.fill((0, 0, 0))
 
     # --- REBUILT THE DRAWING LOOP ---
-    # This new loop calculates colors, draws the color box,
-    # and draws the text all in one pass.
     
     temp_min_frame = np.min(frame)
     temp_max_frame = np.max(frame)
@@ -84,16 +108,11 @@ while running:
         for x in range(SENSOR_WIDTH):
             temp = frame[y * SENSOR_WIDTH + x]
             
-            # --- 1. Calculate Color ---
+            # --- 1. Calculate Normalized Temp ---
             norm = (temp - temp_min_frame) / (temp_max_frame - temp_min_frame + 0.001)
-            norm = max(0.0, min(1.0, norm))
-            red = int(255 * norm)
-            green = 0
-            blue = int(255 * (1 - norm))
-            color = (red, green, blue)
             
-            # --- 2. Draw the 20x20 Color Box ---
-            # We draw this rectangle directly to the screen
+            # --- 2. Get Color and Draw Box ---
+            color = get_heatmap_color(norm)
             pygame.draw.rect(screen, color, 
                              (x * SCALE_FACTOR, y * SCALE_FACTOR, 
                               SCALE_FACTOR, SCALE_FACTOR))
@@ -101,7 +120,8 @@ while running:
             # --- 3. Draw the Text Overlay ---
             
             # --- Dynamic Text Color ---
-            text_color = TEXT_BLACK if norm > 0.6 else TEXT_WHITE
+            # Use black text on hot colors (yellow/red), white on cool (blue/green)
+            text_color = TEXT_BLACK if norm > 0.5 else TEXT_WHITE
             
             # Create the text string (rounded to integer)
             text_str = f"{temp:0.0f}"
