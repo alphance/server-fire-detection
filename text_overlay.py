@@ -43,7 +43,9 @@ thermal_surface = pygame.Surface((SENSOR_WIDTH, SENSOR_HEIGHT))
 # --- MLX90640 Sensor Setup ---
 try:
     i2c = busio.I2C(board.SCL, board.SDA, frequency=800000)
-    mlx = adafruit_mlx90640.MLX9G90640(i2c)
+    # --- THIS IS THE FIX ---
+    # Corrected the typo from MLX9G90640 to MLX90640
+    mlx = adafruit_mlx90640.MLX90640(i2c)
     mlx.refresh_rate = adafruit_mlx90640.RefreshRate.REFRESH_4_HZ
     frame = [0] * (SENSOR_WIDTH * SENSOR_HEIGHT)
     print("MLX90640 sensor initialized. Starting feed...")
@@ -69,8 +71,7 @@ while running:
     except ValueError:
         continue # skip this frame
 
-    # --- THIS IS THE FIX ---
-    # Clear the entire screen with black before drawing anything
+    # --- Clear the entire screen with black before drawing anything
     screen.fill((0, 0, 0))
     # ----------------------
 
@@ -129,3 +130,4 @@ while running:
 pygame.font.quit()
 pygame.quit()
 print("Pygame window closed. Exiting.")
+
