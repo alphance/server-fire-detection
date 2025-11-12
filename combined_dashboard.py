@@ -10,9 +10,6 @@ import board
 import busio
 
 # --- Try to import sensor libraries ---
-# This allows the script to run even if some libraries aren't installed
-# or sensors aren't connected (for testing)
-
 try:
     import adafruit_dht
 except ImportError:
@@ -30,7 +27,7 @@ DHT_PIN_1 = board.D23
 DHT_PIN_2 = board.D24
 DHT_POLL_INTERVAL = 2.0  # Time in seconds between DHT reads
 MLX_REFRESH_RATE = adafruit_mlx90640.RefreshRate.REFRESH_4_HZ if adafruit_mlx90640 else None
-DASH_REFRESH_INTERVAL = 500 # Milliseconds (ms) for dashboard update (2Hz)
+DASH_REFRESH_INTERVAL = 1500 # Milliseconds (ms)
 
 # MLX sensor dimensions
 MLX_WIDTH = 32
@@ -40,11 +37,7 @@ MLX_HEIGHT = 24
 MAX_HISTORY = 100  # Number of data points to show on the history graph
 
 # ---- GLOBAL DATA STORE ----
-# We use a single lock to protect all shared data
 data_lock = threading.Lock()
-
-# Deques are efficient "lists" that automatically pop old items
-# when the max length is reached.
 latest_data = {
     "dht": {"t1": None, "h1": None, "t2": None, "h2": None},
     "mlx_frame": np.zeros((MLX_HEIGHT, MLX_WIDTH)), # 24x32 array
@@ -55,7 +48,6 @@ latest_data = {
         "avg": collections.deque(maxlen=MAX_HISTORY),
     }
 }
-# Variable to track DHT polling
 last_dht_read_time = 0
 
 # ---- SENSOR INITIALIZATION ----
@@ -82,7 +74,6 @@ def setup_sensors():
     # --- Initialize MLX90640 ---
     if adafruit_mlx90640:
         try:
-            # *** FIX 2: Lowered frequency for stability ***
             i2c = busio.I2C(board.SCL, board.SDA, frequency=400000) 
             mlx = adafruit_mlx90640.MLX90640(i2c)
             mlx.refresh_rate = MLX_REFRESH_RATE
@@ -96,15 +87,14 @@ def setup_sensors():
 def sensor_reading_thread(dht1, dht2, mlx):
     """
     A single background thread to read all sensors.
-    The MLX sensor drives the loop speed, and DHTs are read on an interval.
     """
     global last_dht_read_time
-    raw_frame = [0] * (MLX_WIDTH * MLX_HEIGHT) # Buffer for MLX data
+    raw_frame = [0] * (MLX_WIDTH * MLX_HEIGHT) 
 
     while True:
         current_time = time.monotonic()
         
-        # --- 1. Read DHT Sensors (if they exist and interval has passed) ---
+        # --- 1. Read DHT Sensors ---
         if (current_time - last_dht_read_time) > DHT_POLL_INTERVAL:
             dht_readings = {}
             if dht1:
@@ -121,27 +111,25 @@ def sensor_reading_thread(dht1, dht2, mlx):
                 except Exception:
                     dht_readings["t2"], dht_readings["h2"] = None, None
             
-            # Update global data with lock
             with data_lock:
                 latest_data["dht"].update(dht_readings)
             
             last_dht_read_time = current_time
 
-        # --- 2. Read MLX Sensor (if it exists) ---
+        # --- 2. Read MLX Sensor ---
         if mlx:
             try:
                 mlx.getFrame(raw_frame)
                 
-                # Process the frame
                 frame_arr = np.array(raw_frame)
                 t_min = np.min(frame_arr)
                 t_max = np.max(frame_arr)
                 t_avg = np.mean(frame_arr)
-                
-                # Reshape for heatmap (24 rows, 32 cols)
                 frame_2d = frame_arr.reshape((MLX_HEIGHT, MLX_WIDTH))
 
-                # Update global data with lock
+                # *** CHANGE 1: Added a debug print so you can see sensor data in terminal ***
+                print(f"DEBUG: New MLX frame. Min={t_min:.1f}, Max={t_max:.1f}, Avg={t_avg:.1f}")
+
                 with data_lock:
                     latest_data["mlx_frame"] = frame_2d
                     latest_data["mlx_stats"]["time"].append(current_time)
@@ -150,24 +138,21 @@ def sensor_reading_thread(dht1, dht2, mlx):
                     latest_data["mlx_stats"]["avg"].append(t_avg)
 
             except ValueError:
-                # This can happen if a frame is bad
                 print("MLX read error (ValueError), skipping frame.")
                 continue
             except Exception as e:
                 print(f"Unhandled MLX error: {e}")
-                time.sleep(0.5) # Avoid spamming errors
+                time.sleep(0.5) 
 
-        # If no MLX, we need to sleep to avoid a 100% CPU busy-loop
         if not mlx:
             time.sleep(DASH_REFRESH_INTERVAL / 1000.0)
-
 
 # ---- DASH APP SETUP ----
 app = dash.Dash(__name__)
 app.title = "Combined Sensor Dashboard"
 
 app.layout = html.Div(style={'fontFamily': 'Arial'}, children=[
-    html.H1("Server Room Sensor Dashboard"),
+    html.H1("Server Room Sensor Dashboard", style={'textAlign': 'center'}),
     
     dcc.Interval(
         id='interval-component',
@@ -175,29 +160,32 @@ app.layout = html.Div(style={'fontFamily': 'Arial'}, children=[
         n_intervals=0
     ),
     
-    # Status text for DHTs
-    html.Div([
-        html.H3("DHT Sensor Status"),
-        html.Div(id='dht-status-1', style={'fontSize': 18}),
-        html.Div(id='dht-status-2', style={'fontSize': 18}),
-    ], style={'textAlign': 'center', 'marginBottom': 20}),
-    
-    # Main content area (Graphs)
+    # Main content area
     html.Div(style={'display': 'flex', 'flexWrap': 'wrap'}, children=[
         
-        # Left Column
+        # --- TOP LEFT: THERMAL IMAGE ---
         html.Div(style={'flex': '50%', 'padding': 10}, children=[
             html.H3("Live Thermal Image"),
-            dcc.Graph(id='thermal-heatmap'),
+            dcc.Graph(id='thermal-heatmap', style={'height': '400px'}),
         ]),
         
-        # Right Column
+        # --- TOP RIGHT: THERMAL HISTORY ---
         html.Div(style={'flex': '50%', 'padding': 10}, children=[
             html.H3("Thermal Sensor History (Min/Max/Avg)"),
-            dcc.Graph(id='mlx-history-graph'),
-            
+            dcc.Graph(id='mlx-history-graph', style={'height': '400px'}),
+        ]),
+        
+        # --- BOTTOM LEFT: DHT STATUS TEXT ---
+        html.Div(style={'flex': '50%', 'padding': 10}, children=[
+            html.H3("DHT Sensor Status"),
+            html.Div(id='dht-status-1', style={'fontSize': 20, 'fontWeight': 'bold'}),
+            html.Div(id='dht-status-2', style={'fontSize': 20, 'fontWeight': 'bold'}),
+        ]),
+
+        # --- BOTTOM RIGHT: DHT BAR CHART ---
+        html.Div(style={'flex': '50%', 'padding': 10}, children=[
             html.H3("Current DHT Readings"),
-            dcc.Graph(id='dht-bar-chart'),
+            dcc.Graph(id='dht-bar-chart', style={'height': '400px'}),
         ]),
     ])
 ])
@@ -217,7 +205,6 @@ def update_dashboard(n):
         dht = latest_data["dht"].copy()
         frame = latest_data["mlx_frame"]
         
-        # Convert deques to lists for Plotly
         stats = {
             "time": list(latest_data["mlx_stats"]["time"]),
             "min": list(latest_data["mlx_stats"]["min"]),
@@ -230,15 +217,21 @@ def update_dashboard(n):
     s2_text = f"Sensor 2 — Temp: {dht['t2']:.1f} °C, Humidity: {dht['h2']:.1f} %" if dht['t2'] is not None else "Sensor 2: Waiting for data..."
 
     # --- 2. Create Thermal Heatmap ---
-    # We flip the 'y' axis so it displays correctly
+    t_min = np.min(frame)
+    t_max = np.max(frame)
+    
+    # *** CHANGE 2: The CRITICAL fix. Prevents graph crash if all pixels are same temp. ***
+    if t_min == t_max:
+        t_max = t_min + 1  # Add 1 degree to create a valid range
+    
     heatmap_fig = go.Figure(data=go.Heatmap(
         z=frame,
         colorscale='Inferno',
-        zmin=np.min(frame), # Auto-scale color range to this frame
-        zmax=np.max(frame)
+        zmin=t_min, 
+        zmax=t_max
     ))
     heatmap_fig.update_layout(
-        title='MLX90640 (Click and drag to zoom)',
+        title=f'MLX90640 (Min: {t_min:.1f}C, Max: {t_max:.1f}C)',
         yaxis=dict(autorange='reversed') # Flip Y-axis
     )
 
@@ -275,5 +268,5 @@ if __name__ == "__main__":
     ).start()
     
     print("--- Starting Dash server on http://0.0.0.0:8050 ---")
-    # *** FIX 1: Added use_reloader=False to fix threading issue ***
+    # Run with use_reloader=False to fix threading issue
     app.run(host='0.0.0.0', port=8050, debug=True, use_reloader=False)
