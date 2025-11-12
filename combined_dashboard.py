@@ -82,7 +82,8 @@ def setup_sensors():
     # --- Initialize MLX90640 ---
     if adafruit_mlx90640:
         try:
-            i2c = busio.I2C(board.SCL, board.SDA, frequency=800000)
+            # *** FIX 2: Lowered frequency for stability ***
+            i2c = busio.I2C(board.SCL, board.SDA, frequency=400000) 
             mlx = adafruit_mlx90640.MLX90640(i2c)
             mlx.refresh_rate = MLX_REFRESH_RATE
             print("MLX90640 Thermal Camera initialized.")
@@ -274,5 +275,5 @@ if __name__ == "__main__":
     ).start()
     
     print("--- Starting Dash server on http://0.0.0.0:8050 ---")
-    # IMPORTANT: Read the note below about debug=True
-    app.run(host='0.0.0.0', port=8050, debug=True)
+    # *** FIX 1: Added use_reloader=False to fix threading issue ***
+    app.run(host='0.0.0.0', port=8050, debug=True, use_reloader=False)
