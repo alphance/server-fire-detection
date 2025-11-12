@@ -172,7 +172,9 @@ app.layout = html.Div(style={'fontFamily': 'Arial'}, children=[
                 inline=True,
                 style={'marginBottom': '10px'}
             ),
-            dcc.Graph(id='thermal-heatmap'),
+            
+            # *** FIX 1: Set a larger fixed height to ensure visibility ***
+            dcc.Graph(id='thermal-heatmap', style={'height': '600px'}),
         ]),
         
         # --- TOP RIGHT: THERMAL HISTORY ---
@@ -253,13 +255,10 @@ def update_dashboard(n, text_overlay_values): # Parameter for toggle state
 
     heatmap_fig = go.Figure(data=[heatmap_trace])
     
-    # *** THIS IS THE FIX ***
     heatmap_fig.update_layout(
-        # Fixed the typo in the title (MLX90640)
         title=f'MLX90640 (Min: {t_min:.1f}C, Max: {t_max:.1f}C)',
-        # This single line is all we need for the square aspect ratio
-        yaxis=dict(autorange='reversed', scaleanchor='x', scaleratio=1), 
-        # Removed the "xaxis=dict(constrain='domain')" line which caused the conflict
+        # *** FIX 2: Removed scaleanchor logic to prevent blank graph ***
+        yaxis=dict(autorange='reversed'), 
         autosize=True
     )
 
@@ -272,7 +271,7 @@ def update_dashboard(n, text_overlay_values): # Parameter for toggle state
 
     # --- 4. Create DHT Bar Chart ---
     temps = [dht['t1'] or 0, dht['t2'] or 0]
-    hums = [dht['h1'] or 0, h2 or 0]
+    hums = [dht['h1'] or 0, dht['h2'] or 0]
     
     dht_fig = go.Figure(data=[
         go.Bar(name='Temperature (°C)', x=['Sensor 1', 'Sensor 2'], y=temps),
