@@ -173,8 +173,8 @@ app.layout = html.Div(style={'fontFamily': 'Arial'}, children=[
                 style={'marginBottom': '10px'}
             ),
             
-            # We keep the fixed height to stabilize the layout
-            dcc.Graph(id='thermal-heatmap', style={'height': '600px'}),
+            # *** FIX 1: Made the graph component taller ***
+            dcc.Graph(id='thermal-heatmap', style={'height': '800px'}),
         ]),
         
         # --- TOP RIGHT: THERMAL HISTORY ---
@@ -238,10 +238,11 @@ def update_dashboard(n, text_overlay_values): # Parameter for toggle state
     text_font_props = None
 
     if 'show' in text_overlay_values:
-        text_data = frame.round(1) 
+        # *** FIX 2: Round to 0 decimals (Integers) to prevent text overlap ***
+        text_data = frame.round(0).astype(int) 
         text_template = "%{text}"
         
-        # *** FIX 2: Increased font size to 12 ***
+        # Kept the larger font size, which should fit now
         text_font_props = dict(color='black', size=12) 
     
     heatmap_trace = go.Heatmap(
@@ -260,7 +261,7 @@ def update_dashboard(n, text_overlay_values): # Parameter for toggle state
     heatmap_fig.update_layout(
         title=f'MLX90640 (Min: {t_min:.1f}C, Max: {t_max:.1f}C)',
         
-        # *** FIX 1: Re-added scaleanchor to make it square ***
+        # Kept scaleanchor to make it square
         yaxis=dict(autorange='reversed', scaleanchor='x', scaleratio=1), 
         autosize=True
     )
