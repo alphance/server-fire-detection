@@ -172,15 +172,12 @@ app.layout = html.Div(style={'fontFamily': 'Arial'}, children=[
                 inline=True,
                 style={'marginBottom': '10px'}
             ),
-            
-            # *** FIX 1: Removed fixed height. This lets the graph expand. ***
             dcc.Graph(id='thermal-heatmap'),
         ]),
         
         # --- TOP RIGHT: THERMAL HISTORY ---
         html.Div(style={'flex': '50%', 'padding': 10}, children=[
             html.H3("Thermal Sensor History (Min/Max/Avg)"),
-            # Keep fixed height here for a balanced layout
             dcc.Graph(id='mlx-history-graph', style={'height': '400px'}), 
         ]),
         
@@ -238,48 +235,44 @@ def update_dashboard(n, text_overlay_values): # Parameter for toggle state
     text_template = None
     text_font_props = None
 
-    # Check if the toggle is checked
     if 'show' in text_overlay_values:
-        text_data = frame.round(1) # Pass the raw numbers
-        text_template = "%{text}"   # Tell plotly to use the numbers from 'text'
-        
-        # *** FIX 2 & 3: Changed color to 'black' and size to '10' ***
+        text_data = frame.round(1) 
+        text_template = "%{text}"
         text_font_props = dict(color='black', size=10) 
     
-    # Create the heatmap trace
     heatmap_trace = go.Heatmap(
         z=frame,
         colorscale='Inferno',
         zmin=t_min, 
         zmax=t_max,
-        # Apply the text overlay properties
         text=text_data,
         texttemplate=text_template,
         textfont=text_font_props,
-        # Show temp on hover
         hovertemplate='<b>Temperature:</b> %{z:.1f} °C<extra></extra>' 
     )
 
     heatmap_fig = go.Figure(data=[heatmap_trace])
     
+    # *** THIS IS THE FIX ***
     heatmap_fig.update_layout(
+        # Fixed the typo in the title (MLX90640)
         title=f'MLX90640 (Min: {t_min:.1f}C, Max: {t_max:.1f}C)',
-        # This logic forces the 4:3 aspect ratio
+        # This single line is all we need for the square aspect ratio
         yaxis=dict(autorange='reversed', scaleanchor='x', scaleratio=1), 
-        xaxis=dict(constrain='domain'),
+        # Removed the "xaxis=dict(constrain='domain')" line which caused the conflict
         autosize=True
     )
 
     # --- 3. Create MLX History Graph ---
     history_fig = go.Figure()
     history_fig.add_trace(go.Scatter(x=stats['time'], y=stats['max'], name='Max Temp', mode='lines'))
-    history_fig.add_trace(_o.Scatter(x=stats['time'], y=stats['avg'], name='Avg Temp', mode='lines'))
+    history_fig.add_trace(go.Scatter(x=stats['time'], y=stats['avg'], name='Avg Temp', mode='lines'))
     history_fig.add_trace(go.Scatter(x=stats['time'], y=stats['min'], name='Min Temp', mode='lines'))
     history_fig.update_layout(title='Temperature Trends')
 
     # --- 4. Create DHT Bar Chart ---
     temps = [dht['t1'] or 0, dht['t2'] or 0]
-    hums = [dht['h1'] or 0, dht['h2'] or 0]
+    hums = [dht['h1'] or 0, h2 or 0]
     
     dht_fig = go.Figure(data=[
         go.Bar(name='Temperature (°C)', x=['Sensor 1', 'Sensor 2'], y=temps),
