@@ -165,7 +165,6 @@ app.layout = html.Div(style={'fontFamily': 'Arial'}, children=[
         # --- TOP LEFT: THERMAL IMAGE ---
         html.Div(style={'flex': '50%', 'padding': 10}, children=[
             html.H3("Live Thermal Image"),
-            # New checklist for text overlay
             dcc.Checklist(
                 id='mlx-text-overlay-toggle',
                 options=[{'label': 'Show Temperature Values', 'value': 'show'}],
@@ -205,9 +204,9 @@ app.layout = html.Div(style={'fontFamily': 'Arial'}, children=[
      Output('mlx-history-graph', 'figure'),
      Output('dht-bar-chart', 'figure')],
     [Input('interval-component', 'n_intervals'),
-     Input('mlx-text-overlay-toggle', 'value')] # New input for toggle
+     Input('mlx-text-overlay-toggle', 'value')] # Input for toggle
 )
-def update_dashboard(n, text_overlay_values): # New parameter for toggle state
+def update_dashboard(n, text_overlay_values): # Parameter for toggle state
     # --- Get a consistent snapshot of data ---
     with data_lock:
         dht = latest_data["dht"].copy()
@@ -230,65 +229,40 @@ def update_dashboard(n, text_overlay_values): # New parameter for toggle state
     
     if t_min == t_max:
         t_max = t_min + 1  # Add 1 degree to create a valid range
+
+    # *** NEW: Simplified and fast text overlay logic ***
+    text_data = None
+    text_template = None
+    text_font_props = None
+
+    # Check if the toggle is checked
+    if 'show' in text_overlay_values:
+        text_data = frame.round(1) # Pass the raw numbers
+        text_template = "%{text}"   # Tell plotly to use the numbers from 'text'
+        # Set a single font color and size for speed
+        text_font_props = dict(color='white', size=8) 
     
-    heatmap_data = go.Heatmap(
+    # Create the heatmap trace
+    heatmap_trace = go.Heatmap(
         z=frame,
         colorscale='Inferno',
         zmin=t_min, 
         zmax=t_max,
-        # *** NEW: Enforce aspect ratio on the heatmap trace itself ***
-        xaxis='x',
-        yaxis='y',
-        fixed_ratio=True,
+        # Apply the text overlay properties
+        text=text_data,
+        texttemplate=text_template,
+        textfont=text_font_props,
+        # Show temp on hover
+        hovertemplate='<b>Temperature:</b> %{z:.1f} °C<extra></extra>' 
     )
 
-    heatmap_fig = go.Figure(data=[heatmap_data])
+    heatmap_fig = go.Figure(data=[heatmap_trace])
     
-    # *** NEW: Add text overlay if the checkbox is checked ***
-    if 'show' in text_overlay_values:
-        x_coords = np.arange(MLX_WIDTH)
-        y_coords = np.arange(MLX_HEIGHT)
-        text_labels = frame.round(1).astype(str) # Round to 1 decimal place and convert to string
-
-        heatmap_fig.add_trace(go.Heatmap(
-            z=frame,
-            colorscale='Inferno',
-            zmin=t_min,
-            zmax=t_max,
-            # We add a transparent heatmap with text on top
-            # to keep the colors consistent with the background heatmap
-            showscale=False,
-            hovertemplate='<b>Temperature:</b> %{z:.1f} °C<extra></extra>' # Show temp on hover
-        ))
-
-        # Add text layer
-        for y_idx in range(MLX_HEIGHT):
-            for x_idx in range(MLX_WIDTH):
-                temp_val = frame[y_idx, x_idx]
-                heatmap_fig.add_annotation(
-                    x=x_idx,
-                    y=y_idx,
-                    text=f"{temp_val:.1f}", # Format text to 1 decimal place
-                    showarrow=False,
-                    font=dict(
-                        color='white' if (temp_val < (t_min + t_max) / 2) else 'black', # Auto-choose text color
-                        size=8 # Adjust text size as needed
-                    ),
-                    xanchor='center',
-                    yanchor='middle'
-                )
-
     heatmap_fig.update_layout(
         title=f'MLX90640 (Min: {t_min:.1f}C, Max: {t_max:.1f}C)',
-        yaxis=dict(autorange='reversed', scaleanchor='x', scaleratio=1), # *** NEW: Enforce aspect ratio on Y-axis ***
-        xaxis=dict(constrain='domain'), # *** NEW: Constrain X-axis to domain ***
-        margin=dict(l=50, r=50, t=50, b=50), # Adjust margins if needed
-        # Set aspect ratio of the plot area
-        autosize=True,
-        # You might need to adjust height/width of dcc.Graph if this doesn't work perfectly
-        # Forcing width/height here can sometimes conflict with flexbox, but can be a fallback
-        # width=600, 
-        # height=400,
+        yaxis=dict(autorange='reversed', scaleanchor='x', scaleratio=1), # Enforce aspect ratio
+        xaxis=dict(constrain='domain'), # Enforce aspect ratio
+        autosize=True
     )
 
     # --- 3. Create MLX History Graph ---
@@ -324,4 +298,5 @@ if __name__ == "__main__":
     ).start()
     
     print("--- Starting Dash server on http://0.0.0.0:8050 ---")
+    # Run with use_reloader=False to fix threading issue
     app.run(host='0.0.0.0', port=8050, debug=True, use_reloader=False)
