@@ -1,0 +1,12 @@
+import os, smtplib
+GMAIL_EMAIL = os.getenv("GMAIL_EMAIL")
+GMAIL_APP_PASSWORD = os.getenv("GMAIL_APP_PASSWORD")
+smtp = smtplib.SMTP("smtp.gmail.com", 587)
+smtp.set_debuglevel(1)
+smtp.ehlo()
+smtp.starttls()
+smtp.ehlo()
+smtp.login(GMAIL_EMAIL, GMAIL_APP_PASSWORD)
+smtp.sendmail(GMAIL_EMAIL, GMAIL_EMAIL, "Subject: test\n\nThis is a test from the Pi.")
+smtp.quit()
+print("done")
