@@ -1,12 +1,25 @@
-import os, smtplib
-GMAIL_EMAIL = os.getenv("GMAIL_EMAIL")
-GMAIL_APP_PASSWORD = os.getenv("GMAIL_APP_PASSWORD")
+import os
+import smtplib
+from dotenv import load_dotenv
+
+# Load .env file
+load_dotenv()
+
+EMAIL_SENDER = os.getenv("EMAIL_SENDER")
+EMAIL_PASSWORD = os.getenv("EMAIL__APP_PASSWORD")
+
 smtp = smtplib.SMTP("smtp.gmail.com", 587)
 smtp.set_debuglevel(1)
 smtp.ehlo()
 smtp.starttls()
 smtp.ehlo()
-smtp.login(GMAIL_EMAIL, GMAIL_APP_PASSWORD)
-smtp.sendmail(GMAIL_EMAIL, GMAIL_EMAIL, "Subject: test\n\nThis is a test from the Pi.")
+smtp.login(EMAIL_SENDER, EMAIL_PASSWORD)
+
+smtp.sendmail(
+    EMAIL_SENDER,
+    EMAIL_SENDER,
+    "Subject: Gmail Test\n\nThis is a test from the Raspberry Pi."
+)
+
 smtp.quit()
-print("done")
+print("Email test finished.")
