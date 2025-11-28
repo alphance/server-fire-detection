@@ -6,7 +6,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 EMAIL_SENDER = os.getenv("EMAIL_SENDER")
-EMAIL_PASSWORD = os.getenv("EMAIL__APP_PASSWORD")
+EMAIL_PASSWORD = os.getenv("EMAIL_APP_PASSWORD")
 
 smtp = smtplib.SMTP("smtp.gmail.com", 587)
 smtp.set_debuglevel(1)
