@@ -3,7 +3,11 @@ secure_dashboard.py
 
 Secure local-only Dash dashboard with Gmail App Password alerts.
 Supports 4 DHT22 Sensors + 1 MLX90640 Thermal Camera.
-Features: Radio Button Selection (Single Source), Humidity Logic, 4-Sensor Array.
+Features: 
+- Radio Button Selection (Single Source)
+- Humidity & Temperature Logic
+- 4-Sensor Array
+- Centralized Configuration Variables
 """
 
 import os
@@ -48,7 +52,7 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.image import MIMEImage
 
 # ---------------------------
-# Config
+# Config & Thresholds
 # ---------------------------
 GMAIL_EMAIL = os.getenv("EMAIL_SENDER")
 GMAIL_APP_PASSWORD = os.getenv("EMAIL_APP_PASSWORD")
@@ -56,6 +60,11 @@ SMTP_SERVER = "smtp.gmail.com"
 SMTP_PORT = 587
 ALERT_COOLDOWN = int(os.getenv("ALERT_COOLDOWN", "300"))
 DASH_REFRESH_INTERVAL = int(os.getenv("DASH_REFRESH_INTERVAL_MS", "1500"))
+
+# --- DEFAULT THRESHOLDS (Change these numbers to adjust defaults) ---
+DEFAULT_DHT_TEMP_THRESHOLD = 30   # Max ambient temp in °C
+DEFAULT_DHT_HUM_THRESHOLD = 60    # Max humidity in %
+DEFAULT_THERMAL_TEMP_THRESHOLD = 40 # Max surface temp in °C
 
 MLX_WIDTH = 32
 MLX_HEIGHT = 24
@@ -261,7 +270,7 @@ app.layout = html.Div(style={'fontFamily':'Arial','maxWidth':'1200px','margin':'
     html.Div(style={'backgroundColor':'#f0f0f0','padding':'15px','borderRadius':'10px','marginBottom':'20px'}, children=[
         html.H3("⚙️ Alert Configuration"),
         
-        # CHANGED: RadioItems for Single Selection
+        # RadioItems for Single Selection
         html.Div([html.Label("Active Alert Source:"), 
                   dcc.RadioItems(id='alert-source-selector',
                                 options=[{'label':' Monitor DHT Sensors (Temp & Hum)','value':'dht'},
@@ -274,15 +283,18 @@ app.layout = html.Div(style={'fontFamily':'Arial','maxWidth':'1200px','margin':'
         html.Div(style={'display':'flex','gap':'20px','flexWrap':'wrap', 'marginTop':'15px'}, children=[
             # DHT Container (Always exists, visibility toggled)
             html.Div(id='dht-settings-container', style={'display':'flex','flex':2,'gap':'20px','borderRight':'2px solid #ccc', 'paddingRight':'10px'}, children=[
-                html.Div([html.Label("Max Ambient Temp (°C):"), dcc.Input(id='input-dht-temp', type='number', value=30, style={'width':'100%'})], style={'flex':1}),
-                html.Div([html.Label("Max Humidity (%):"), dcc.Input(id='input-dht-hum', type='number', value=60, style={'width':'100%'})], style={'flex':1})
+                html.Div([html.Label("Max Ambient Temp (°C):"), 
+                          dcc.Input(id='input-dht-temp', type='number', value=DEFAULT_DHT_TEMP_THRESHOLD, style={'width':'100%'})], style={'flex':1}),
+                html.Div([html.Label("Max Humidity (%):"), 
+                          dcc.Input(id='input-dht-hum', type='number', value=DEFAULT_DHT_HUM_THRESHOLD, style={'width':'100%'})], style={'flex':1})
             ]),
             # Thermal Container
             html.Div(id='thermal-settings-container', style={'display':'none','flex':2,'gap':'20px'}, children=[
                 html.Div([html.Label("Thermal Trigger Mode:"), dcc.Dropdown(id='thermal-mode-select',
                       options=[{'label':'Max Temp (Hotspot)','value':'max'},{'label':'Avg Temp','value':'avg'}],
                       value='max', clearable=False)], style={'flex':1}),
-                html.Div([html.Label("Surface Temp Limit (°C):"), dcc.Input(id='input-thermal-temp', type='number', value=40, style={'width':'100%'})], style={'flex':1})
+                html.Div([html.Label("Surface Temp Limit (°C):"), 
+                          dcc.Input(id='input-thermal-temp', type='number', value=DEFAULT_THERMAL_TEMP_THRESHOLD, style={'width':'100%'})], style={'flex':1})
             ]),
             html.Div([html.Label("Alert Email Address:"), dcc.Input(id='input-email-addr', type='text', placeholder='Press Enter to Apply', debounce=True)], style={'flex':2}),
         ]),
