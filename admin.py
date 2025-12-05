@@ -1,7 +1,7 @@
 """
 secure_dashboard.py
 
-Secure local-only Dash dashboard with SQLite History, Replay, and RBAC.
+Secure local-only Dash dashboard with SQLite History, Aggregation & Replay.
 Features:
 - Live Dashboard (4 DHTs + Thermal)
 - History "Replay" (View past thermal images)
@@ -10,6 +10,8 @@ Features:
 - Side-by-Side Replay UI with Full Stats
 - GLOBAL CONFIG: Settings stored in DB, synced to all users.
 - ADMIN MODE: Only Admin can edit names/thresholds.
+- FIX: Thermal Feed Options (Values/Square Pixels) restored.
+- FIX: Auto-Refresh added to History Tab.
 """
 
 import os
@@ -62,12 +64,12 @@ from email.mime.image import MIMEImage
 # ---------------------------
 GMAIL_EMAIL = os.getenv("EMAIL_SENDER")
 GMAIL_APP_PASSWORD = os.getenv("EMAIL_APP_PASSWORD")
-ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "capstone2025") # Default Password
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "capstone2025") 
 SMTP_SERVER = "smtp.gmail.com"
 SMTP_PORT = 587
 ALERT_COOLDOWN = int(os.getenv("ALERT_COOLDOWN", "300"))
 DASH_REFRESH_INTERVAL = int(os.getenv("DASH_REFRESH_INTERVAL_MS", "1500"))
-CONFIG_SYNC_INTERVAL = 5000 # Check for config changes every 5 seconds
+CONFIG_SYNC_INTERVAL = 5000 
 DB_FILE = "sensor_data.db"
 DB_LOG_INTERVAL = 2.0  
 
@@ -109,11 +111,8 @@ def init_db():
     c.execute('''CREATE TABLE IF NOT EXISTS dht_readings (timestamp TEXT, sensor_id INTEGER, temp REAL, humidity REAL)''')
     c.execute('''CREATE TABLE IF NOT EXISTS thermal_data (timestamp TEXT, max_temp REAL, avg_temp REAL, min_temp REAL, raw_frame BLOB)''')
     c.execute('''CREATE TABLE IF NOT EXISTS alerts (timestamp TEXT, alert_type TEXT, message TEXT)''')
-    
-    # NEW: Global Settings Table
     c.execute('''CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)''')
     
-    # Insert Defaults if empty
     defaults = {
         'name-s1': 'Sensor 1', 'name-s2': 'Sensor 2', 'name-s3': 'Sensor 3', 'name-s4': 'Sensor 4',
         'dht-temp': '45', 'dht-hum-min': '30', 'dht-hum-max': '60',
@@ -133,7 +132,6 @@ init_db()
 data_lock = threading.Lock()
 
 def get_global_config():
-    """Fetch all settings from DB"""
     try:
         conn = sqlite3.connect(DB_FILE)
         c = conn.cursor()
@@ -145,7 +143,6 @@ def get_global_config():
         return {}
 
 def update_global_config(new_config):
-    """Update settings in DB"""
     try:
         conn = sqlite3.connect(DB_FILE)
         c = conn.cursor()
@@ -158,7 +155,6 @@ def update_global_config(new_config):
         logger.error(f"Config Save Error: {e}")
         return False
 
-# In-memory cache for the sensor thread (so it doesn't hit DB 100x/sec)
 config_cache = get_global_config()
 
 def create_history():
@@ -396,13 +392,11 @@ app = dash.Dash(__name__)
 app.title = "Server Room Monitor"
 
 live_tab_content = html.Div([
-    # Store session data (Admin status)
     dcc.Store(id='session-store', storage_type='session'),
-    dcc.Interval(id='config-sync-interval', interval=CONFIG_SYNC_INTERVAL), # 5s sync
+    dcc.Interval(id='config-sync-interval', interval=CONFIG_SYNC_INTERVAL),
 
     html.Div(style={'backgroundColor':'#f0f0f0','padding':'15px','borderRadius':'10px','marginBottom':'20px'}, children=[
         
-        # Header + Login
         html.Div([
             html.H3("⚙️ Alert Configuration", style={'display':'inline-block'}),
             html.Div([
@@ -412,7 +406,6 @@ live_tab_content = html.Div([
             ], style={'float':'right'})
         ], style={'marginBottom':'15px', 'overflow':'hidden'}),
 
-        # Renaming
         html.Div([html.Label("Sensor Labels:"),
             html.Div([
                 dcc.Input(id='name-s1', type='text', disabled=True, style={'marginRight':'10px', 'padding':'5px'}),
@@ -422,14 +415,12 @@ live_tab_content = html.Div([
             ], style={'display':'flex', 'flexWrap':'wrap', 'marginTop':'5px', 'marginBottom':'15px'})
         ]),
         
-        # Source Select
         html.Div([html.Label("Active Alert Source:"), 
                   dcc.RadioItems(id='alert-source-selector',
                                 options=[{'label':' Monitor DHT Sensors','value':'dht'},{'label':' Monitor Thermal Camera','value':'thermal'}],
                                 value='thermal', inline=True, inputStyle={"margin-right": "5px", "margin-left": "20px"})
                  ]),
         
-        # Thresholds
         html.Div(style={'display':'flex','gap':'20px','flexWrap':'wrap', 'marginTop':'15px'}, children=[
             html.Div(id='dht-settings-container', style={'display':'flex','flex':3,'gap':'20px','borderRight':'2px solid #ccc', 'paddingRight':'10px'}, children=[
                 html.Div([html.Label("Max Exhaust Temp (°C):"), dcc.Input(id='input-dht-temp', type='number', disabled=True, style={'width':'100%'})], style={'flex':1}),
@@ -443,7 +434,6 @@ live_tab_content = html.Div([
             html.Div([html.Label("Alert Email Address:"), dcc.Input(id='input-email-addr', type='text', disabled=True, placeholder='Email...', style={'flex':2})]),
         ]),
         
-        # Save Button (Hidden for non-admins)
         html.Div([
             html.Button('SAVE GLOBAL SETTINGS', id='btn-save-config', style={'backgroundColor':'#d9534f', 'color':'white', 'fontWeight':'bold', 'width':'100%', 'marginTop':'15px', 'display':'none'}),
             html.Div(id='save-status', style={'textAlign':'center', 'marginTop':'5px'})
@@ -451,7 +441,6 @@ live_tab_content = html.Div([
         html.Div(id='alert-status-div', style={'marginTop':'10px','color':'red','fontWeight':'bold'})
     ]),
     
-    # Graphs
     html.Div(style={'display':'flex','flexWrap':'wrap'}, children=[
         html.Div(style={'flex':'50%','padding':10}, children=[
             html.H3("Thermal Feed"), 
@@ -500,7 +489,9 @@ history_tab_content = html.Div([
             html.Label("3. View Mode:", style={'fontWeight':'bold'}),
             dcc.RadioItems(
                 id='history-interval-select',
-                options=[{'label': ' Raw', 'value': 'raw'}, {'label': ' 1 Min', 'value': '1T'}, {'label': ' 5 Min', 'value': '5T'}, {'label': ' 10 Min', 'value': '10T'}, {'label': ' Daily', 'value': 'D'}],
+                options=[
+                    {'label': ' Raw', 'value': 'raw'}, {'label': ' 1 Min', 'value': '1T'}, {'label': ' 5 Min', 'value': '5T'}, {'label': ' 10 Min', 'value': '10T'}, {'label': ' Daily', 'value': 'D'}
+                ],
                 value='raw', inline=True
             )
         ], style={'display':'inline-block', 'marginRight':'20px', 'verticalAlign':'top'}),
@@ -519,9 +510,17 @@ history_tab_content = html.Div([
             dcc.Checklist(id='history-filter-select', options=[{'label': ' Exceeded Only', 'value': 'exceeded'}], value=[], inline=True)
         ], style={'display':'inline-block', 'marginRight':'20px', 'verticalAlign':'top'}),
 
+        # Auto-Refresh Toggle
+        html.Div([
+            html.Label("6. Auto-Refresh:", style={'fontWeight':'bold'}),
+            dcc.Checklist(id='history-auto-refresh', options=[{'label': ' Enabled', 'value': 'enabled'}], value=[], inline=True)
+        ], style={'display':'inline-block', 'marginRight':'20px', 'verticalAlign':'top'}),
+
         html.Button("Load Data", id='btn-load-history', style={'height':'40px', 'backgroundColor':'#007BFF', 'color':'white', 'border':'none', 'padding':'0 20px', 'cursor':'pointer', 'verticalAlign':'top'}),
     ], style={'backgroundColor':'#e9ecef', 'padding':'15px', 'borderRadius':'5px', 'marginBottom':'20px'}),
     
+    dcc.Interval(id='history-interval', interval=2000), 
+
     html.Div([
         html.H4("Master Data Log", style={'color':'#555'}),
         dash_table.DataTable(
@@ -555,18 +554,14 @@ app.layout = html.Div(style={'fontFamily':'Arial','maxWidth':'1200px','margin':'
               [State('admin-pass', 'value'), State('session-store', 'data')])
 def admin_login(n, password, session_data):
     is_admin = session_data.get('is_admin', False) if session_data else False
-    
-    if n > 0 and password == ADMIN_PASSWORD:
-        is_admin = True
-    
+    if n > 0 and password == ADMIN_PASSWORD: is_admin = True
     disabled = not is_admin
     save_btn_style = {'backgroundColor':'#d9534f', 'color':'white', 'fontWeight':'bold', 'width':'100%', 'marginTop':'15px'}
     if not is_admin: save_btn_style['display'] = 'none'
-    
     msg = "Logged In (Admin)" if is_admin else ""
     return {'is_admin': is_admin}, msg, disabled, disabled, disabled, disabled, disabled, disabled, disabled, disabled, disabled, disabled, save_btn_style
 
-# 2. Config Sync (Load from DB or Save to DB)
+# 2. Config Sync
 @app.callback([Output('name-s1', 'value'), Output('name-s2', 'value'), Output('name-s3', 'value'), Output('name-s4', 'value'),
                Output('input-dht-temp', 'value'), Output('input-dht-hum-min', 'value'), Output('input-dht-hum-max', 'value'),
                Output('input-thermal-temp', 'value'), Output('thermal-mode-select', 'value'), Output('input-email-addr', 'value'),
@@ -577,22 +572,12 @@ def admin_login(n, password, session_data):
                State('input-thermal-temp', 'value'), State('thermal-mode-select', 'value'), State('input-email-addr', 'value')])
 def sync_config(n_interval, n_save, ns1, ns2, ns3, ns4, dht_t, dht_hmin, dht_hmax, therm_t, therm_mode, email):
     ctx_id = ctx.triggered_id
-    
-    # SAVE ACTION (Admin Clicked Save)
     if ctx_id == 'btn-save-config':
-        new_conf = {
-            'name-s1': ns1, 'name-s2': ns2, 'name-s3': ns3, 'name-s4': ns4,
-            'dht-temp': dht_t, 'dht-hum-min': dht_hmin, 'dht-hum-max': dht_hmax,
-            'thermal-temp': therm_t, 'thermal-mode': therm_mode, 'alert-email': email
-        }
+        new_conf = {'name-s1': ns1, 'name-s2': ns2, 'name-s3': ns3, 'name-s4': ns4, 'dht-temp': dht_t, 'dht-hum-min': dht_hmin, 'dht-hum-max': dht_hmax, 'thermal-temp': therm_t, 'thermal-mode': therm_mode, 'alert-email': email}
         update_global_config(new_conf)
-        # Update cache immediately for this thread
         global config_cache
         config_cache = new_conf
         return ns1, ns2, ns3, ns4, dht_t, dht_hmin, dht_hmax, therm_t, therm_mode, email, "Settings Saved Globally!"
-
-    # SYNC ACTION (Periodic Update from DB)
-    # We always pull from DB to ensure non-admins see updates
     conf = get_global_config()
     return (conf.get('name-s1'), conf.get('name-s2'), conf.get('name-s3'), conf.get('name-s4'),
             conf.get('dht-temp'), conf.get('dht-hum-min'), conf.get('dht-hum-max'),
@@ -604,18 +589,18 @@ def toggle_view(selection):
     if selection == 'dht': return {'display':'flex','flex':3,'gap':'20px','borderRight':'2px solid #ccc', 'paddingRight':'10px'}, {'display':'none'}
     else: return {'display':'none'}, {'display':'flex','flex':2,'gap':'20px'}
 
-# 4. Update Graphs & Alerts
+# 4. Update Live View
 @app.callback([Output('dht-status-display','children'),
                Output('thermal-heatmap','figure'), Output('mlx-history-graph','figure'),
                Output('dht-graph-1','figure'), Output('dht-graph-2','figure'),
                Output('dht-graph-3','figure'), Output('dht-graph-4','figure'),
                Output('alert-status-div','children')],
-              [Input('interval-component','n_intervals')],
-              [State('name-s1', 'value'), State('name-s2', 'value'), State('name-s3', 'value'), State('name-s4', 'value')]) # Get names from UI (which are synced from DB)
-def update_live_view(n, ns1, ns2, ns3, ns4):
+              [Input('interval-component','n_intervals'), Input('view-options', 'value')],
+              [State('name-s1', 'value'), State('name-s2', 'value'), State('name-s3', 'value'), State('name-s4', 'value')])
+def update_live_view(n, view_opts, ns1, ns2, ns3, ns4):
     global last_alert_time, config_cache
+    if view_opts is None: view_opts = []
     
-    # Use cached config for thresholds to avoid DB hit every second
     dht_temp_lim = float(config_cache.get('dht-temp', 100))
     dht_hum_min = float(config_cache.get('dht-hum-min', 0))
     dht_hum_max = float(config_cache.get('dht-hum-max', 100))
@@ -639,7 +624,6 @@ def update_live_view(n, ns1, ns2, ns3, ns4):
     is_thermal_alert = False
     current_time = time.time()
 
-    # Check Logic
     for i in range(1, 5):
         t_val = dht[f't{i}']
         h_val = dht[f'h{i}']
@@ -681,8 +665,15 @@ def update_live_view(n, ns1, ns2, ns3, ns4):
     try: t_min = float(np.min(frame)); t_max = float(np.max(frame))
     except: frame = np.zeros((MLX_HEIGHT, MLX_WIDTH)); t_min, t_max = 0.0, 1.0
     if t_min == t_max: t_max = t_min + 1.0
-    heatmap_fig = go.Figure(data=[go.Heatmap(z=frame, zmin=t_min, zmax=t_max, colorscale='Inferno')])
-    heatmap_fig.update_layout(title=f'Max: {t_max:.1f}°C', yaxis=dict(autorange='reversed'))
+    
+    # Text Data for Heatmap
+    text_data = frame.round(0).astype(int) if 'text' in view_opts else None
+    
+    heatmap_fig = go.Figure(data=[go.Heatmap(z=frame, zmin=t_min, zmax=t_max, colorscale='Inferno', 
+                                             text=text_data, texttemplate="%{text}", textfont={"size":10})])
+    layout_args = dict(title=f'Max: {t_max:.1f}°C', yaxis=dict(autorange='reversed'))
+    if 'square' in view_opts: layout_args['yaxis']['scaleanchor'] = 'x'
+    heatmap_fig.update_layout(**layout_args)
 
     history_fig = go.Figure()
     history_fig.add_trace(go.Scatter(x=stats.get('time',[]), y=stats.get('max',[]), name='Max'))
@@ -709,13 +700,20 @@ def update_live_view(n, ns1, ns2, ns3, ns4):
 
 @app.callback([Output('master-table', 'data'), Output('master-table', 'selected_rows'), 
                Output('master-table', 'style_data_conditional'), Output('master-table', 'columns')],
-              [Input('btn-load-history', 'n_clicks')],
+              [Input('btn-load-history', 'n_clicks'), Input('history-interval', 'n_intervals')],
               [State('history-date-picker', 'start_date'), State('history-date-picker', 'end_date'),
                State('history-interval-select', 'value'), State('history-filter-select', 'value'),
                State('history-column-select', 'value'), State('time-start', 'value'), State('time-end', 'value'),
-               State('name-s1','value'), State('name-s2','value'), State('name-s3','value'), State('name-s4','value')])
-def load_history_data(n, start, end, interval, filter_opts, visible_sensors, time_start, time_end, ns1, ns2, ns3, ns4):
-    if n is None: return [], [], [], []
+               State('history-auto-refresh', 'value'),
+               State('name-s1','value'), State('name-s2','value'), 
+               State('name-s3','value'), State('name-s4','value')])
+def load_history_data(n_click, n_interval, start, end, interval, filter_opts, visible_sensors, time_start, time_end, auto_refresh, ns1, ns2, ns3, ns4):
+    trigger = ctx.triggered_id
+    if trigger == 'history-interval' and 'enabled' not in auto_refresh:
+        return no_update 
+    
+    if n_click is None and n_interval is None: return [], [], [], []
+    
     conn = sqlite3.connect(DB_FILE)
     start_ts = f"{start} {time_start}:00"
     end_ts = f"{end} {time_end}:59"
@@ -737,10 +735,11 @@ def load_history_data(n, start, end, interval, filter_opts, visible_sensors, tim
         df_final.set_index('timestamp', inplace=True)
         df_agg = df_final.resample(interval).mean().dropna(how='all')
         df_agg.reset_index(inplace=True)
+        if interval == 'D': df_agg['timestamp'] = df_agg['timestamp'].dt.strftime("%Y-%m-%d")
+        else: df_agg['timestamp'] = df_agg['timestamp'].dt.strftime("%Y-%m-%d %H:%M:%S")
         df_final = df_agg
-        df_final['timestamp'] = df_final['timestamp'].dt.strftime("%Y-%m-%d" if interval == 'D' else "%Y-%m-%d %H:%M:%S")
 
-    # Use Cached Config for Filter Thresholds
+    # Filters using cached config
     d_lim, h_min, h_max, t_lim = float(config_cache.get('dht-temp',100)), float(config_cache.get('dht-hum-min',0)), float(config_cache.get('dht-hum-max',100)), float(config_cache.get('thermal-temp',100))
     t_mode = config_cache.get('thermal-mode', 'max')
 
@@ -766,7 +765,6 @@ def load_history_data(n, start, end, interval, filter_opts, visible_sensors, tim
 
     columns = [{"name": "Timestamp", "id": "timestamp"}]
     if 'mlx' in visible_sensors: columns.extend([{"name": "MLX Max", "id": "max_temp"}, {"name": "MLX Avg", "id": "avg_temp"}, {"name": "MLX Min", "id": "min_temp"}])
-    
     def add_cols(code, inp, def_n):
         if code in visible_sensors:
             lbl = inp or def_n
@@ -790,7 +788,10 @@ def replay_snapshot(selected_rows, data):
             arr = np.array(json.loads(zlib.decompress(res[0]).decode('utf-8')))
             fig = go.Figure(data=[go.Heatmap(z=arr, colorscale='Inferno')])
             fig.update_layout(title="Snapshot", margin=dict(l=20, r=20, t=30, b=20), yaxis=dict(autorange='reversed'))
-            return fig, [html.B("Selected: "), ts, html.Br(), html.B("Actual: "), res[1], html.Br(), html.B(f"Max: {np.max(arr):.1f}°C Avg: {np.mean(arr):.1f}°C")]
+            return fig, [html.B("Selected: "), ts, html.Br(), html.B("Actual: "), res[1], html.Br(), 
+                         html.B(f"Max: {np.max(arr):.1f}°C"), html.Br(),
+                         html.B(f"Avg: {np.mean(arr):.1f}°C"), html.Br(),
+                         html.B(f"Min: {np.min(arr):.1f}°C")]
         except: pass
     return go.Figure(), "No Data"
 
