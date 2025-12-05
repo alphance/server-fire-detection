@@ -7,9 +7,10 @@ Features:
 - History "Replay" (View past thermal images)
 - Data Aggregation (Raw, 1 min, 5 min, 10 min, Daily)
 - Time & Date Filtering
+- Dynamic Column Visibility (Select which sensors to view)
 - Side-by-Side Replay UI with Full Stats
-- FIX: Visual Highlighting (Red text for breached values)
-- FIX: Filter respects "Avg/Max" mode selection
+- FIX: Robust "Exceeded" Filtering (Ignores disconnected sensors)
+- FIX: Table Sorting Enabled
 """
 
 import os
@@ -82,16 +83,16 @@ DHT_POLL_INTERVAL = float(os.getenv("DHT_POLL_INTERVAL", "2.0"))
 
 # --- SENSOR PIN CONFIGURATION ---
 # OPTION A: LIVE MODE
-DHT_PIN_1 = getattr(board, "D23", None) if board else None
-DHT_PIN_2 = getattr(board, "D24", None) if board else None
-DHT_PIN_3 = getattr(board, "D17", None) if board else None 
-DHT_PIN_4 = getattr(board, "D27", None) if board else None 
+# DHT_PIN_1 = getattr(board, "D23", None) if board else None
+# DHT_PIN_2 = getattr(board, "D24", None) if board else None
+# DHT_PIN_3 = getattr(board, "D17", None) if board else None 
+# DHT_PIN_4 = getattr(board, "D27", None) if board else None 
 
 # OPTION B: DEMO MODE
-#DHT_PIN_1 = None
-#DHT_PIN_2 = None
-#DHT_PIN_3 = None
-#DHT_PIN_4 = None
+DHT_PIN_1 = None
+DHT_PIN_2 = None
+DHT_PIN_3 = None
+DHT_PIN_4 = None
 
 MLX_REFRESH_RATE = None
 if adafruit_mlx90640 and hasattr(adafruit_mlx90640, "RefreshRate"):
@@ -420,7 +421,6 @@ history_tab_content = html.Div([
             ),
         ], style={'display':'inline-block', 'marginRight':'20px', 'verticalAlign':'top'}),
         
-        # Time Filter Inputs
         html.Div([
             html.Label("2. Filter Time (HH:MM):", style={'fontWeight':'bold'}),
             html.Div([
@@ -448,7 +448,23 @@ history_tab_content = html.Div([
         ], style={'display':'inline-block', 'marginRight':'20px', 'verticalAlign':'top'}),
 
         html.Div([
-            html.Label("4. Filters:", style={'fontWeight':'bold'}),
+            html.Label("4. Visible Sensors:", style={'fontWeight':'bold'}),
+            dcc.Checklist(
+                id='history-column-select',
+                options=[
+                    {'label': ' Thermal Camera', 'value': 'mlx'},
+                    {'label': ' Sensor 1', 'value': 's1'},
+                    {'label': ' Sensor 2', 'value': 's2'},
+                    {'label': ' Sensor 3', 'value': 's3'},
+                    {'label': ' Sensor 4', 'value': 's4'}
+                ],
+                value=['mlx', 's1', 's2', 's3', 's4'],
+                inline=True
+            )
+        ], style={'display':'inline-block', 'marginRight':'20px', 'verticalAlign':'top'}),
+
+        html.Div([
+            html.Label("5. Filters:", style={'fontWeight':'bold'}),
             dcc.Checklist(
                 id='history-filter-select',
                 options=[{'label': ' Exceeded Only', 'value': 'exceeded'}],
@@ -464,23 +480,14 @@ history_tab_content = html.Div([
         html.H4("Master Data Log (Click a row to inspect)", style={'color':'#555'}),
         dash_table.DataTable(
             id='master-table',
-            columns=[
-                {"name": "Timestamp", "id": "timestamp"},
-                {"name": "MLX Max", "id": "max_temp"},
-                {"name": "MLX Avg", "id": "avg_temp"},
-                {"name": "MLX Min", "id": "min_temp"},
-                {"name": "S1 Temp", "id": "S1_temp"}, {"name": "S1 Hum", "id": "S1_humidity"},
-                {"name": "S2 Temp", "id": "S2_temp"}, {"name": "S2 Hum", "id": "S2_humidity"},
-                {"name": "S3 Temp", "id": "S3_temp"}, {"name": "S3 Hum", "id": "S3_humidity"},
-                {"name": "S4 Temp", "id": "S4_temp"}, {"name": "S4 Hum", "id": "S4_humidity"},
-            ],
+            columns=[], # Columns are now dynamic
             data=[],
             page_size=12,
             row_selectable='single',
-            sort_action='native',  # ENABLE SORTING
+            sort_action='native',
             style_cell={'textAlign': 'center', 'minWidth': '50px', 'fontSize':'12px'},
             style_header={'backgroundColor': 'rgb(230, 230, 230)', 'fontWeight': 'bold'},
-            style_data_conditional=[] # Will be populated by callback
+            style_data_conditional=[] 
         ),
     ]),
     
@@ -628,16 +635,20 @@ def update_dashboard(n, alert_source, view_opts, dht_temp_lim, dht_hum_min, dht_
         status_lines.append(html.Span(s_text))
     return [html.Div(status_lines)], heatmap_fig, history_fig, dht_figs[0], dht_figs[1], dht_figs[2], dht_figs[3], alert_msg
 
-@app.callback([Output('master-table', 'data'), Output('master-table', 'selected_rows'), Output('master-table', 'style_data_conditional')],
+@app.callback([Output('master-table', 'data'), Output('master-table', 'selected_rows'), 
+               Output('master-table', 'style_data_conditional'), Output('master-table', 'columns')],
               [Input('btn-load-history', 'n_clicks')],
               [State('history-date-picker', 'start_date'), State('history-date-picker', 'end_date'),
                State('history-interval-select', 'value'), State('history-filter-select', 'value'),
+               State('history-column-select', 'value'),
                State('time-start', 'value'), State('time-end', 'value'),
                State('input-dht-temp', 'value'), State('input-dht-hum-min', 'value'),
                State('input-dht-hum-max', 'value'), State('input-thermal-temp', 'value'),
-               State('thermal-mode-select', 'value')]) # ADDED MODE SELECT
-def load_history_data(n, start, end, interval, filter_opts, time_start, time_end, dht_limit, hum_min, hum_max, thermal_limit, thermal_mode):
-    if n is None: return [], [], []
+               State('thermal-mode-select', 'value'),
+               State('name-s1','value'), State('name-s2','value'), 
+               State('name-s3','value'), State('name-s4','value')])
+def load_history_data(n, start, end, interval, filter_opts, visible_sensors, time_start, time_end, dht_limit, hum_min, hum_max, thermal_limit, thermal_mode, ns1, ns2, ns3, ns4):
+    if n is None: return [], [], [], []
     
     conn = sqlite3.connect(DB_FILE)
     
@@ -651,7 +662,7 @@ def load_history_data(n, start, end, interval, filter_opts, time_start, time_end
     df_dht = pd.read_sql_query(query_dht, conn)
     conn.close()
     
-    if df_thermal.empty: return [], [], []
+    if df_thermal.empty: return [], [], [], []
 
     if not df_dht.empty:
         df_dht['sensor_lbl'] = 'S' + df_dht['sensor_id'].astype(str)
@@ -671,38 +682,11 @@ def load_history_data(n, start, end, interval, filter_opts, time_start, time_end
         else: df_agg['timestamp'] = df_agg['timestamp'].dt.strftime("%Y-%m-%d %H:%M:%S")
         df_final = df_agg
 
-    # --- CONDITIONAL STYLES (Red Text for violations) ---
-    styles = [{'if': {'row_index': 'odd'}, 'backgroundColor': 'rgb(248, 248, 248)'}]
-    
-    # 1. Thermal Style
-    if thermal_limit is not None:
-        col = 'max_temp' if thermal_mode == 'max' else 'avg_temp'
-        styles.append({
-            'if': {'filter_query': f'{{{col}}} > {thermal_limit}', 'column_id': col},
-            'color': 'red', 'fontWeight': 'bold'
-        })
-
-    # 2. DHT Temp Style
-    if dht_limit is not None:
-        for c in [col for col in df_final.columns if 'temp' in col and col.startswith('S')]:
-            styles.append({
-                'if': {'filter_query': f'{{{c}}} > {dht_limit}', 'column_id': c},
-                'color': 'red', 'fontWeight': 'bold'
-            })
-
-    # 3. DHT Humidity Style
-    if hum_min is not None and hum_max is not None:
-        for c in [col for col in df_final.columns if 'humidity' in c and col.startswith('S')]:
-            styles.append({
-                'if': {'filter_query': f'{{{c}}} < {hum_min} || {{{c}}} > {hum_max}', 'column_id': c},
-                'color': 'red', 'fontWeight': 'bold'
-            })
-
-    # --- FILTER LOGIC (Show Only Exceeded) ---
+    # FIX: Robust Filtering (Ignores Disconnected Sensors)
     if 'exceeded' in filter_opts:
         mask = pd.Series(False, index=df_final.index)
         
-        # Check Thermal (Respecting Mode)
+        # Check Thermal
         if thermal_limit is not None:
             col = 'max_temp' if thermal_mode == 'max' else 'avg_temp'
             mask |= (df_final[col] > float(thermal_limit))
@@ -724,7 +708,47 @@ def load_history_data(n, start, end, interval, filter_opts, time_start, time_end
         
         df_final = df_final[mask]
 
-    return df_final.round(1).to_dict('records'), [], styles
+    # --- DYNAMIC COLUMNS (With Custom Labels) ---
+    columns = [{"name": "Timestamp", "id": "timestamp"}]
+    
+    if 'mlx' in visible_sensors:
+        columns.extend([
+            {"name": "MLX Max", "id": "max_temp"},
+            {"name": "MLX Avg", "id": "avg_temp"},
+            {"name": "MLX Min", "id": "min_temp"}
+        ])
+    
+    # Helper to add sensor columns with custom names
+    def add_sensor_cols(code, name_input, default_name):
+        if code in visible_sensors:
+            lbl = name_input or default_name
+            # Note: ID must match dataframe columns: S1_temp, S1_humidity
+            columns.extend([
+                {"name": f"{lbl} Temp", "id": f"{default_name}_temp"},
+                {"name": f"{lbl} Hum", "id": f"{default_name}_humidity"}
+            ])
+
+    add_sensor_cols('s1', ns1, "S1")
+    add_sensor_cols('s2', ns2, "S2")
+    add_sensor_cols('s3', ns3, "S3")
+    add_sensor_cols('s4', ns4, "S4")
+
+    # --- CONDITIONAL STYLES (Red Text) ---
+    styles = [{'if': {'row_index': 'odd'}, 'backgroundColor': 'rgb(248, 248, 248)'}]
+    
+    if thermal_limit is not None:
+        col = 'max_temp' if thermal_mode == 'max' else 'avg_temp'
+        styles.append({'if': {'filter_query': f'{{{col}}} > {thermal_limit}', 'column_id': col}, 'color': 'red', 'fontWeight': 'bold'})
+
+    if dht_limit is not None:
+        for c in [col for col in df_final.columns if 'temp' in col and col.startswith('S')]:
+            styles.append({'if': {'filter_query': f'{{{c}}} > {dht_limit}', 'column_id': c}, 'color': 'red', 'fontWeight': 'bold'})
+
+    if hum_min is not None and hum_max is not None:
+        for c in [col for col in df_final.columns if 'humidity' in c and col.startswith('S')]:
+            styles.append({'if': {'filter_query': f'{{{c}}} < {hum_min} || {{{c}}} > {hum_max}', 'column_id': c}, 'color': 'red', 'fontWeight': 'bold'})
+
+    return df_final.round(1).to_dict('records'), [], styles, columns
 
 @app.callback([Output('replay-heatmap', 'figure'), Output('replay-info-panel', 'children')],
               [Input('master-table', 'selected_rows')],
