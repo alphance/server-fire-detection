@@ -6,9 +6,9 @@ Features:
 - Live Dashboard (4 DHTs + Thermal)
 - History "Replay" (View past thermal images)
 - Data Aggregation (Raw, 1 min, 5 min, 10 min, Daily)
-- Time & Date Filtering (Precision lookup)
-- Side-by-Side Replay UI with Full Stats (Min/Max/Avg)
-- OPTIMIZED: Zlib Compression & Rate Limiting for DB
+- Time & Date Filtering
+- Side-by-Side Replay UI with Full Stats
+- FIX: Corrected Master Table Column IDs for Humidity
 """
 
 import os
@@ -87,10 +87,10 @@ DHT_PIN_3 = getattr(board, "D17", None) if board else None
 DHT_PIN_4 = getattr(board, "D27", None) if board else None 
 
 # OPTION B: DEMO MODE (Use this right now for speed/testing)
-DHT_PIN_1 = None
-DHT_PIN_2 = None
-DHT_PIN_3 = None
-DHT_PIN_4 = None
+#DHT_PIN_1 = None
+#DHT_PIN_2 = None
+#DHT_PIN_3 = None
+#DHT_PIN_4 = None
 
 MLX_REFRESH_RATE = None
 if adafruit_mlx90640 and hasattr(adafruit_mlx90640, "RefreshRate"):
@@ -468,10 +468,10 @@ history_tab_content = html.Div([
                 {"name": "MLX Max", "id": "max_temp"},
                 {"name": "MLX Avg", "id": "avg_temp"},
                 {"name": "MLX Min", "id": "min_temp"},
-                {"name": "S1 Temp", "id": "S1_temp"}, {"name": "S1 Hum", "id": "S1_hum"},
-                {"name": "S2 Temp", "id": "S2_temp"}, {"name": "S2 Hum", "id": "S2_hum"},
-                {"name": "S3 Temp", "id": "S3_temp"}, {"name": "S3 Hum", "id": "S3_hum"},
-                {"name": "S4 Temp", "id": "S4_temp"}, {"name": "S4 Hum", "id": "S4_hum"},
+                {"name": "S1 Temp", "id": "S1_temp"}, {"name": "S1 Hum", "id": "S1_humidity"},
+                {"name": "S2 Temp", "id": "S2_temp"}, {"name": "S2 Hum", "id": "S2_humidity"},
+                {"name": "S3 Temp", "id": "S3_temp"}, {"name": "S3 Hum", "id": "S3_humidity"},
+                {"name": "S4 Temp", "id": "S4_temp"}, {"name": "S4 Hum", "id": "S4_humidity"},
             ],
             data=[],
             page_size=12,
@@ -676,7 +676,7 @@ def load_history_data(n, start, end, interval, filter_opts, time_start, time_end
                 if 'temp' in col and 'S' in col: conditions.append(df_final[col] > dht_limit)
         if hum_min and hum_max:
             for col in df_final.columns:
-                if 'hum' in col and 'S' in col: conditions.append((df_final[col] < hum_min) | (df_final[col] > hum_max))
+                if 'humidity' in col and 'S' in col: conditions.append((df_final[col] < hum_min) | (df_final[col] > hum_max))
         if conditions:
             final_mask = pd.concat(conditions, axis=1).any(axis=1)
             df_final = df_final[final_mask]
