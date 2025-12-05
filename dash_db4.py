@@ -6,8 +6,8 @@ Features:
 - Live Dashboard (4 DHTs + Thermal)
 - History "Replay" (View past thermal images)
 - Data Aggregation (Raw, 1 min, 5 min, 10 min, Daily)
-- "Show Only Exceeded" Filter
-- Master Data Table (All sensors in one view)
+- Time & Date Filtering (Precision lookup)
+- Side-by-Side Replay UI
 - OPTIMIZED: Zlib Compression & Rate Limiting for DB
 """
 
@@ -20,7 +20,7 @@ import io
 import collections
 import sqlite3
 import json 
-import zlib  # Added for database compression
+import zlib
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -66,7 +66,7 @@ SMTP_PORT = 587
 ALERT_COOLDOWN = int(os.getenv("ALERT_COOLDOWN", "300"))
 DASH_REFRESH_INTERVAL = int(os.getenv("DASH_REFRESH_INTERVAL_MS", "1500"))
 DB_FILE = "sensor_data.db"
-DB_LOG_INTERVAL = 2.0  # Seconds between DB writes (prevents massive file growth)
+DB_LOG_INTERVAL = 2.0  
 
 # --- DEFAULT THRESHOLDS ---
 DEFAULT_DHT_TEMP_THRESHOLD = 45     
@@ -80,13 +80,13 @@ MAX_HISTORY = 100
 DHT_POLL_INTERVAL = float(os.getenv("DHT_POLL_INTERVAL", "2.0"))
 
 # --- SENSOR PIN CONFIGURATION ---
-# UPDATE THIS TO MATCH YOUR LIVE WIRING
+# OPTION A: LIVE MODE (Uncomment these 4 lines when sensors are connected!)
 DHT_PIN_1 = getattr(board, "D23", None) if board else None
 DHT_PIN_2 = getattr(board, "D24", None) if board else None
 DHT_PIN_3 = getattr(board, "D17", None) if board else None 
 DHT_PIN_4 = getattr(board, "D27", None) if board else None 
 
-# DEMO MODE (All None)
+# OPTION B: DEMO MODE (Use this right now for speed/testing)
 #DHT_PIN_1 = None
 #DHT_PIN_2 = None
 #DHT_PIN_3 = None
@@ -107,18 +107,12 @@ logging.basicConfig(level=logging.DEBUG,
 logger = logging.getLogger("sensor_dashboard")
 
 def init_db():
-    """Create the tables if they don't exist"""
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    # Table for DHT Readings
     c.execute('''CREATE TABLE IF NOT EXISTS dht_readings 
                  (timestamp TEXT, sensor_id INTEGER, temp REAL, humidity REAL)''')
-    
-    # UPDATED: Table for Thermal Data (raw_frame is now BLOB for compression)
     c.execute('''CREATE TABLE IF NOT EXISTS thermal_data 
                  (timestamp TEXT, max_temp REAL, avg_temp REAL, min_temp REAL, raw_frame BLOB)''')
-    
-    # Table for Alerts
     c.execute('''CREATE TABLE IF NOT EXISTS alerts 
                  (timestamp TEXT, alert_type TEXT, message TEXT)''')
     conn.commit()
@@ -165,7 +159,6 @@ last_alert_time = 0
 def setup_sensors():
     sensors = [None, None, None, None]
     mlx = None
-    
     def init_dht(pin, name):
         if adafruit_dht and pin:
             try:
@@ -175,7 +168,6 @@ def setup_sensors():
             except Exception as e:
                 logger.warning(f"{name} init failed: {e}")
         return None
-
     sensors[0] = init_dht(DHT_PIN_1, "DHT1")
     sensors[1] = init_dht(DHT_PIN_2, "DHT2")
     sensors[2] = init_dht(DHT_PIN_3, "DHT3")
@@ -190,33 +182,24 @@ def setup_sensors():
             logger.info("MLX initialized")
         except Exception as e:
             logger.warning(f"MLX init failed: {e}")
-    
     return sensors, mlx
 
 # ---------------------------
-# DB Helper (Optimized)
+# DB Helper
 # ---------------------------
 def log_to_db(timestamp, dht_results, thermal_stats, raw_frame_arr=None):
     try:
         conn = sqlite3.connect(DB_FILE)
         c = conn.cursor()
-        
-        # Log DHT
         if dht_results:
             for i, (t, h) in enumerate(dht_results):
                 if t is not None:
-                    c.execute("INSERT INTO dht_readings VALUES (?, ?, ?, ?)", 
-                              (timestamp, i+1, t, h))
-        
-        # Log Thermal + Raw Frame (Compressed)
+                    c.execute("INSERT INTO dht_readings VALUES (?, ?, ?, ?)", (timestamp, i+1, t, h))
         if thermal_stats and raw_frame_arr is not None:
-            # OPTIMIZATION: Compress the frame data to save space
             frame_json = json.dumps(raw_frame_arr.tolist()).encode('utf-8')
             compressed_frame = zlib.compress(frame_json)
-            
             c.execute("INSERT INTO thermal_data VALUES (?, ?, ?, ?, ?)",
                       (timestamp, thermal_stats['max'], thermal_stats['avg'], thermal_stats['min'], compressed_frame))
-        
         conn.commit()
         conn.close()
     except Exception as e:
@@ -239,8 +222,6 @@ def log_alert_to_db(alert_type, message):
 def sensor_reading_thread(dht_sensors, mlx):
     global last_dht_read_time
     raw_frame = [0.0] * (MLX_WIDTH * MLX_HEIGHT)
-    
-    # State tracking for DB logging
     last_db_log_time = 0
     latest_dht_results = [(None, None)] * 4
     
@@ -248,23 +229,17 @@ def sensor_reading_thread(dht_sensors, mlx):
         current_time = time.monotonic()
         db_timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         
-        # --- READ DHTs ---
         if (current_time - last_dht_read_time) > DHT_POLL_INTERVAL:
             def read_dht(sensor):
                 try:
-                    if sensor:
-                        return sensor.temperature, sensor.humidity
-                except Exception as e:
-                    logger.debug(f"DHT read error: {e}")
+                    if sensor: return sensor.temperature, sensor.humidity
+                except Exception as e: logger.debug(f"DHT error: {e}")
                 return None, None
             
-            # Read and cache results
             results = []
-            for s in dht_sensors:
-                results.append(read_dht(s))
-            latest_dht_results = results # Cache for DB write
+            for s in dht_sensors: results.append(read_dht(s))
+            latest_dht_results = results
             
-            # Update Live Data
             with data_lock:
                 time_str = datetime.datetime.now().strftime("%H:%M:%S")
                 for i in range(4):
@@ -276,10 +251,8 @@ def sensor_reading_thread(dht_sensors, mlx):
                         latest_data["dht_history"][idx]["time"].append(time_str)
                         latest_data["dht_history"][idx]["temp"].append(t)
                         latest_data["dht_history"][idx]["hum"].append(h)
-            
             last_dht_read_time = current_time
 
-        # --- READ THERMAL CAMERA ---
         thermal_stats_for_db = None
         thermal_frame_for_db = None
         
@@ -287,18 +260,11 @@ def sensor_reading_thread(dht_sensors, mlx):
             try:
                 mlx.getFrame(raw_frame)
                 frame_arr = np.array(raw_frame).reshape((MLX_HEIGHT, MLX_WIDTH))
-                
                 if np.max(frame_arr) > 150:
                     time.sleep(0.1)
                     continue
-
-                thermal_stats_for_db = {
-                    'max': float(np.max(frame_arr)),
-                    'avg': float(np.mean(frame_arr)),
-                    'min': float(np.min(frame_arr))
-                }
+                thermal_stats_for_db = {'max': float(np.max(frame_arr)), 'avg': float(np.mean(frame_arr)), 'min': float(np.min(frame_arr))}
                 thermal_frame_for_db = frame_arr
-
                 with data_lock:
                     latest_data["mlx_frame"] = frame_arr.copy()
                     time_str = datetime.datetime.now().strftime("%H:%M:%S")
@@ -307,17 +273,14 @@ def sensor_reading_thread(dht_sensors, mlx):
                     latest_data["mlx_stats"]["max"].append(thermal_stats_for_db['max'])
                     latest_data["mlx_stats"]["avg"].append(thermal_stats_for_db['avg'])
             except Exception as e:
-                logger.debug(f"MLX read error: {e}")
+                logger.debug(f"MLX error: {e}")
                 time.sleep(0.2)
         
-        # --- WRITE TO DB (Rate Limited) ---
-        # Only write if enough time passed (e.g., every 2.0 seconds)
         if (current_time - last_db_log_time) > DB_LOG_INTERVAL:
             log_to_db(db_timestamp, latest_dht_results, thermal_stats_for_db, thermal_frame_for_db)
             last_db_log_time = current_time
 
-        if not mlx:
-            time.sleep(DASH_REFRESH_INTERVAL / 1000.0)
+        if not mlx: time.sleep(DASH_REFRESH_INTERVAL / 1000.0)
 
 # ---------------------------
 # Email helpers
@@ -334,9 +297,7 @@ def generate_thermal_image_bytes(frame):
         plt.close()
         buf.seek(0)
         return buf.read()
-    except Exception as e:
-        logger.exception(f"Thermal generation failed: {e}")
-        return None
+    except Exception as e: return None
 
 def generate_dht_history_image(sensor_idx, sensor_name):
     buf = io.BytesIO()
@@ -345,59 +306,44 @@ def generate_dht_history_image(sensor_idx, sensor_name):
             times = list(latest_data["dht_history"][sensor_idx]["time"])
             temps = list(latest_data["dht_history"][sensor_idx]["temp"])
             hums = list(latest_data["dht_history"][sensor_idx]["hum"])
-        
         if not times: return None
-
         plt.figure(figsize=(6,3))
-        plt.plot(times, temps, color='red', label='Temp (°C)')
-        plt.plot(times, hums, color='blue', label='Humidity (%)')
+        plt.plot(times, temps, color='red', label='Temp')
+        plt.plot(times, hums, color='blue', label='Hum')
         plt.title(f'History: {sensor_name}')
         plt.legend()
         plt.grid(True)
-        if len(times) > 5:
-            plt.xticks([times[0], times[-1]]) 
-        
+        if len(times) > 5: plt.xticks([times[0], times[-1]]) 
         plt.savefig(buf, format='png', bbox_inches='tight')
         plt.close()
         buf.seek(0)
         return buf.read()
-    except Exception as e:
-        logger.exception(f"DHT graph generation failed: {e}")
-        return None
+    except Exception as e: return None
 
 def send_alert_email_thread(target_email, subject, body, frame, failed_sensors=None):
     def runner():
         log_alert_to_db("EMAIL_SENT", subject)
-        if not GMAIL_EMAIL or not GMAIL_APP_PASSWORD:
-            return
+        if not GMAIL_EMAIL or not GMAIL_APP_PASSWORD: return
         try:
             msg = MIMEMultipart()
             msg['From'] = GMAIL_EMAIL
             msg['To'] = target_email
             msg['Subject'] = subject
             msg.attach(MIMEText(body, 'plain'))
-
             if frame is not None:
                 img_data = generate_thermal_image_bytes(frame)
-                if img_data:
-                    msg.attach(MIMEImage(img_data, name='thermal_snapshot.png'))
-            
+                if img_data: msg.attach(MIMEImage(img_data, name='thermal_snapshot.png'))
             if failed_sensors:
                 for idx, name in failed_sensors:
                     dht_img_data = generate_dht_history_image(idx, name)
-                    if dht_img_data:
-                        filename = f'{name.replace(" ","_")}_history.png'
-                        msg.attach(MIMEImage(dht_img_data, name=filename))
-
+                    if dht_img_data: msg.attach(MIMEImage(dht_img_data, name=f'{name.replace(" ","_")}_history.png'))
             server = smtplib.SMTP(SMTP_SERVER, SMTP_PORT, timeout=15)
             server.starttls()
             server.login(GMAIL_EMAIL, GMAIL_APP_PASSWORD)
             server.send_message(msg)
             server.quit()
             logger.info(f"Email sent to {target_email}")
-        except Exception as e:
-            logger.error(f"Email failed: {e}")
-
+        except Exception as e: logger.error(f"Email failed: {e}")
     t = threading.Thread(target=runner, daemon=True)
     t.start()
 
@@ -407,7 +353,6 @@ def send_alert_email_thread(target_email, subject, body, frame, failed_sensors=N
 app = dash.Dash(__name__)
 app.title = "Server Room Monitor"
 
-# --- LIVE LAYOUT ---
 live_tab_content = html.Div([
     html.Div(style={'backgroundColor':'#f0f0f0','padding':'15px','borderRadius':'10px','marginBottom':'20px'}, children=[
         html.H3("⚙️ Alert Configuration"),
@@ -421,8 +366,7 @@ live_tab_content = html.Div([
         ]),
         html.Div([html.Label("Active Alert Source:"), 
                   dcc.RadioItems(id='alert-source-selector',
-                                options=[{'label':' Monitor DHT Sensors','value':'dht'},
-                                         {'label':' Monitor Thermal Camera','value':'thermal'}],
+                                options=[{'label':' Monitor DHT Sensors','value':'dht'},{'label':' Monitor Thermal Camera','value':'thermal'}],
                                 value='thermal', inline=True, inputStyle={"margin-right": "5px", "margin-left": "20px"})
                  ]),
         html.Div(style={'display':'flex','gap':'20px','flexWrap':'wrap', 'marginTop':'15px'}, children=[
@@ -460,7 +404,7 @@ live_tab_content = html.Div([
     ])
 ])
 
-# --- HISTORY LAYOUT ---
+# --- HISTORY TAB (UPDATED UI) ---
 history_tab_content = html.Div([
     html.H2("Historical Data Browser"),
     html.Div([
@@ -473,67 +417,77 @@ history_tab_content = html.Div([
                 start_date=datetime.date.today(),
                 end_date=datetime.date.today()
             ),
-        ], style={'display':'inline-block', 'marginRight':'20px'}),
+        ], style={'display':'inline-block', 'marginRight':'20px', 'verticalAlign':'top'}),
         
+        # NEW: Time Filter Inputs
         html.Div([
-            html.Label("2. View Mode:", style={'fontWeight':'bold'}),
+            html.Label("2. Filter Time (HH:MM):", style={'fontWeight':'bold'}),
+            html.Div([
+                dcc.Input(id='time-start', type='text', value='00:00', style={'width':'60px', 'marginRight':'5px'}),
+                html.Span(" to "),
+                dcc.Input(id='time-end', type='text', value='23:59', style={'width':'60px', 'marginLeft':'5px'})
+            ])
+        ], style={'display':'inline-block', 'marginRight':'20px', 'verticalAlign':'top'}),
+
+        html.Div([
+            html.Label("3. View Mode:", style={'fontWeight':'bold'}),
             dcc.RadioItems(
                 id='history-interval-select',
                 options=[
-                    {'label': ' Raw Data (Every Second)', 'value': 'raw'},
-                    {'label': ' 1 Minute Avg', 'value': '1T'},
-                    {'label': ' 5 Minute Avg', 'value': '5T'},
-                    {'label': ' 10 Minute Avg', 'value': '10T'},
-                    {'label': ' Daily Avg', 'value': 'D'}
+                    {'label': ' Raw', 'value': 'raw'},
+                    {'label': ' 1 Min', 'value': '1T'},
+                    {'label': ' 5 Min', 'value': '5T'},
+                    {'label': ' 10 Min', 'value': '10T'},
+                    {'label': ' Daily', 'value': 'D'}
                 ],
                 value='raw',
                 inline=True,
-                inputStyle={"margin-right": "5px", "margin-left": "10px"}
+                inputStyle={"margin-right": "5px", "margin-left": "5px"}
             )
-        ], style={'display':'inline-block', 'marginRight':'20px'}),
+        ], style={'display':'inline-block', 'marginRight':'20px', 'verticalAlign':'top'}),
 
         html.Div([
-            html.Label("3. Filters:", style={'fontWeight':'bold'}),
+            html.Label("4. Filters:", style={'fontWeight':'bold'}),
             dcc.Checklist(
                 id='history-filter-select',
-                options=[{'label': ' Show Only Exceeded Thresholds', 'value': 'exceeded'}],
+                options=[{'label': ' Exceeded Only', 'value': 'exceeded'}],
                 value=[],
                 inline=True
             )
-        ], style={'display':'inline-block', 'marginRight':'20px'}),
+        ], style={'display':'inline-block', 'marginRight':'20px', 'verticalAlign':'top'}),
 
-        html.Button("Load Data", id='btn-load-history', style={'height':'40px', 'backgroundColor':'#007BFF', 'color':'white', 'border':'none', 'padding':'0 20px', 'cursor':'pointer'}),
+        html.Button("Load Data", id='btn-load-history', style={'height':'40px', 'backgroundColor':'#007BFF', 'color':'white', 'border':'none', 'padding':'0 20px', 'cursor':'pointer', 'verticalAlign':'top'}),
     ], style={'backgroundColor':'#e9ecef', 'padding':'15px', 'borderRadius':'5px', 'marginBottom':'20px'}),
     
     html.Div([
-        html.H4("Master Data Log (Click a row to see Thermal Snapshot)", style={'color':'#555'}),
+        html.H4("Master Data Log (Click a row to inspect)", style={'color':'#555'}),
         dash_table.DataTable(
             id='master-table',
             columns=[
                 {"name": "Timestamp", "id": "timestamp"},
-                {"name": "MLX Max (°C)", "id": "max_temp"},
-                {"name": "MLX Avg (°C)", "id": "avg_temp"},
-                {"name": "MLX Min (°C)", "id": "min_temp"},
+                {"name": "MLX Max", "id": "max_temp"},
                 {"name": "S1 Temp", "id": "S1_temp"}, {"name": "S1 Hum", "id": "S1_hum"},
                 {"name": "S2 Temp", "id": "S2_temp"}, {"name": "S2 Hum", "id": "S2_hum"},
                 {"name": "S3 Temp", "id": "S3_temp"}, {"name": "S3 Hum", "id": "S3_hum"},
                 {"name": "S4 Temp", "id": "S4_temp"}, {"name": "S4 Hum", "id": "S4_hum"},
             ],
             data=[],
-            page_size=15,
+            page_size=12,
             row_selectable='single',
-            style_cell={'textAlign': 'center', 'minWidth': '60px'},
+            style_cell={'textAlign': 'center', 'minWidth': '50px', 'fontSize':'12px'},
             style_header={'backgroundColor': 'rgb(230, 230, 230)', 'fontWeight': 'bold'},
-            style_data_conditional=[
-                {'if': {'row_index': 'odd'}, 'backgroundColor': 'rgb(248, 248, 248)'}
-            ]
+            style_data_conditional=[{'if': {'row_index': 'odd'}, 'backgroundColor': 'rgb(248, 248, 248)'}]
         ),
     ]),
     
-    html.Div(id='replay-container', style={'marginTop':'30px', 'display':'flex', 'justifyContent':'center'}, children=[
-        html.Div([
-            html.H3("Thermal Snapshot (Replay)", style={'textAlign':'center'}),
-            dcc.Graph(id='replay-heatmap', style={'height':'500px', 'width':'600px'})
+    # NEW: Side-by-Side Replay Layout
+    html.Div(style={'display':'flex', 'marginTop':'20px', 'borderTop':'2px solid #ccc', 'paddingTop':'20px'}, children=[
+        html.Div(style={'flex':1, 'paddingRight':'20px'}, children=[
+            dcc.Graph(id='replay-heatmap', style={'height':'400px'})
+        ]),
+        html.Div(style={'flex':1, 'paddingLeft':'20px', 'backgroundColor':'#f9f9f9', 'borderRadius':'5px'}, children=[
+            html.H3("Snapshot Details", style={'marginTop':'0'}),
+            html.Div(id='replay-info-panel', style={'fontSize':'16px', 'lineHeight':'2em'})
         ])
     ])
 ])
@@ -545,8 +499,6 @@ app.layout = html.Div(style={'fontFamily':'Arial','maxWidth':'1200px','margin':'
     ]),
     dcc.Interval(id='interval-component', interval=DASH_REFRESH_INTERVAL, n_intervals=0),
 ])
-
-# --- CALLBACKS ---
 
 @app.callback([Output('dht-settings-container','style'), Output('thermal-settings-container','style')], [Input('alert-source-selector','value')])
 def toggle_inputs(selection):
@@ -636,7 +588,6 @@ def update_dashboard(n, alert_source, view_opts, dht_temp_lim, dht_hum_min, dht_
     elif email_addr:
         alert_msg = "⚠️ Invalid Email Address format"
 
-    # Heatmap
     try: t_min = float(np.min(frame)); t_max = float(np.max(frame))
     except Exception: frame = np.zeros((MLX_HEIGHT, MLX_WIDTH)); t_min, t_max = 0.0, 1.0
     if t_min == t_max: t_max = t_min + 1.0
@@ -646,14 +597,12 @@ def update_dashboard(n, alert_source, view_opts, dht_temp_lim, dht_hum_min, dht_
     if 'square' in view_opts: layout_args['yaxis']['scaleanchor'] = 'x'
     heatmap_fig.update_layout(**layout_args)
 
-    # Thermal History (Live)
     history_fig = go.Figure()
     history_fig.add_trace(go.Scatter(x=stats.get('time',[]), y=stats.get('max',[]), name='Max'))
     history_fig.add_trace(go.Scatter(x=stats.get('time',[]), y=stats.get('avg',[]), name='Avg'))
     history_fig.add_trace(go.Scatter(x=stats.get('time',[]), y=stats.get('min',[]), name='Min'))
     history_fig.update_layout(title='Thermal Trends', margin=dict(l=20, r=20, t=30, b=20))
 
-    # DHT Graphs
     dht_figs = []
     for i in range(1, 5):
         dh = dht_hist[i]
@@ -673,34 +622,33 @@ def update_dashboard(n, alert_source, view_opts, dht_temp_lim, dht_hum_min, dht_
         name = sensor_names[i]
         s_text = f"{name}: {t:.1f}°C / {h:.1f}% | " if t is not None else f"{name}: -- | "
         status_lines.append(html.Span(s_text))
-    
     return [html.Div(status_lines)], heatmap_fig, history_fig, dht_figs[0], dht_figs[1], dht_figs[2], dht_figs[3], alert_msg
-
-# --- HISTORY CALLBACKS ---
 
 @app.callback([Output('master-table', 'data'), Output('master-table', 'selected_rows')],
               [Input('btn-load-history', 'n_clicks')],
               [State('history-date-picker', 'start_date'), State('history-date-picker', 'end_date'),
                State('history-interval-select', 'value'), State('history-filter-select', 'value'),
+               State('time-start', 'value'), State('time-end', 'value'),
                State('input-dht-temp', 'value'), State('input-dht-hum-min', 'value'),
                State('input-dht-hum-max', 'value'), State('input-thermal-temp', 'value')])
-def load_history_data(n, start, end, interval, filter_opts, dht_limit, hum_min, hum_max, thermal_limit):
+def load_history_data(n, start, end, interval, filter_opts, time_start, time_end, dht_limit, hum_min, hum_max, thermal_limit):
     if n is None: return [], []
     
     conn = sqlite3.connect(DB_FILE)
     
-    # 1. Fetch Thermal Data
-    query_thermal = f"SELECT timestamp, max_temp, avg_temp, min_temp FROM thermal_data WHERE timestamp BETWEEN '{start}' AND '{end} 23:59:59' ORDER BY timestamp DESC"
+    # Construct Timestamp Strings with Time Filter
+    start_ts = f"{start} {time_start}:00"
+    end_ts = f"{end} {time_end}:59"
+
+    query_thermal = f"SELECT timestamp, max_temp, avg_temp, min_temp FROM thermal_data WHERE timestamp BETWEEN '{start_ts}' AND '{end_ts}' ORDER BY timestamp DESC"
     df_thermal = pd.read_sql_query(query_thermal, conn)
     
-    # 2. Fetch DHT Data
-    query_dht = f"SELECT timestamp, sensor_id, temp, humidity FROM dht_readings WHERE timestamp BETWEEN '{start}' AND '{end} 23:59:59' ORDER BY timestamp DESC"
+    query_dht = f"SELECT timestamp, sensor_id, temp, humidity FROM dht_readings WHERE timestamp BETWEEN '{start_ts}' AND '{end_ts}' ORDER BY timestamp DESC"
     df_dht = pd.read_sql_query(query_dht, conn)
     conn.close()
     
     if df_thermal.empty: return [], []
 
-    # Merge DHT data pivot
     if not df_dht.empty:
         df_dht['sensor_lbl'] = 'S' + df_dht['sensor_id'].astype(str)
         df_dht_pivot = df_dht.pivot_table(index='timestamp', columns='sensor_lbl', values=['temp', 'humidity'], aggfunc='first')
@@ -710,66 +658,42 @@ def load_history_data(n, start, end, interval, filter_opts, dht_limit, hum_min, 
     else:
         df_final = df_thermal
 
-    # --- AGGREGATION LOGIC ---
     if interval != 'raw':
-        # Convert timestamp to datetime for resampling
         df_final['timestamp'] = pd.to_datetime(df_final['timestamp'])
         df_final.set_index('timestamp', inplace=True)
-        
-        # Resample (Mean)
-        df_agg = df_final.resample(interval).mean()
-        
-        # Keep only rows that actually have data (drop empty gaps)
-        df_agg = df_agg.dropna(how='all')
-        
-        # Reset index so 'timestamp' is a column again
+        df_agg = df_final.resample(interval).mean().dropna(how='all')
         df_agg.reset_index(inplace=True)
-        # Format varies based on daily vs min aggregation
-        if interval == 'D':
-            df_agg['timestamp'] = df_agg['timestamp'].dt.strftime("%Y-%m-%d")
-        else:
-            df_agg['timestamp'] = df_agg['timestamp'].dt.strftime("%Y-%m-%d %H:%M:%S")
+        if interval == 'D': df_agg['timestamp'] = df_agg['timestamp'].dt.strftime("%Y-%m-%d")
+        else: df_agg['timestamp'] = df_agg['timestamp'].dt.strftime("%Y-%m-%d %H:%M:%S")
         df_final = df_agg
 
-    # --- FILTER LOGIC (Show Only Exceeded) ---
     if 'exceeded' in filter_opts:
         conditions = []
-        # Check Thermal
-        if thermal_limit:
-            conditions.append(df_final['max_temp'] > thermal_limit)
-        
-        # Check DHTs (Dynamic cols)
+        if thermal_limit: conditions.append(df_final['max_temp'] > thermal_limit)
         if dht_limit:
             for col in df_final.columns:
-                if 'temp' in col and 'S' in col: # e.g. S1_temp
-                    conditions.append(df_final[col] > dht_limit)
-        
+                if 'temp' in col and 'S' in col: conditions.append(df_final[col] > dht_limit)
         if hum_min and hum_max:
             for col in df_final.columns:
-                if 'hum' in col and 'S' in col:
-                    conditions.append((df_final[col] < hum_min) | (df_final[col] > hum_max))
-        
+                if 'hum' in col and 'S' in col: conditions.append((df_final[col] < hum_min) | (df_final[col] > hum_max))
         if conditions:
-            # Combine all conditions with OR (|)
             final_mask = pd.concat(conditions, axis=1).any(axis=1)
             df_final = df_final[final_mask]
 
     return df_final.round(1).to_dict('records'), []
 
-@app.callback(Output('replay-heatmap', 'figure'),
+@app.callback([Output('replay-heatmap', 'figure'), Output('replay-info-panel', 'children')],
               [Input('master-table', 'selected_rows')],
               [State('master-table', 'data')])
 def replay_thermal_snapshot(selected_rows, data):
     if not selected_rows or not data:
-        return go.Figure(layout=dict(title="Select a row to see Thermal Snapshot"))
+        return go.Figure(layout=dict(title="Select a row")), "Select a row from the table to view details."
     
-    # Get timestamp from selected row
     row_idx = selected_rows[0]
     target_ts = data[row_idx]['timestamp']
     
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    # Find the closest raw frame to this timestamp (>= target)
     c.execute("SELECT raw_frame, timestamp FROM thermal_data WHERE timestamp >= ? ORDER BY timestamp ASC LIMIT 1", (target_ts,))
     result = c.fetchone()
     conn.close()
@@ -777,22 +701,38 @@ def replay_thermal_snapshot(selected_rows, data):
     if result and result[0]:
         try:
             real_ts = result[1]
-            # Decompress raw bytes to JSON string
             decompressed_json = zlib.decompress(result[0]).decode('utf-8')
-            frame_data = json.loads(decompressed_json)
-            frame_arr = np.array(frame_data)
-            fig = go.Figure(data=[go.Heatmap(z=frame_arr, colorscale='Inferno')])
-            fig.update_layout(title=f"Snapshot near {target_ts} (Actual: {real_ts})", 
-                              yaxis=dict(autorange='reversed', scaleanchor='x'))
-            return fig
-        except Exception as e:
-            return go.Figure(layout=dict(title=f"Error loading frame: {e}"))
+            frame_arr = np.array(json.loads(decompressed_json))
             
-    return go.Figure(layout=dict(title="No raw thermal data found for this time range"))
+            fig = go.Figure(data=[go.Heatmap(z=frame_arr, colorscale='Inferno')])
+            fig.update_layout(title="Thermal Snapshot", margin=dict(l=20, r=20, t=30, b=20), yaxis=dict(autorange='reversed', scaleanchor='x'))
+            
+            # Calculate stats for info panel
+            f_max = np.max(frame_arr)
+            f_avg = np.mean(frame_arr)
+            
+            # Calculate time difference
+            try:
+                t1 = datetime.datetime.strptime(target_ts, "%Y-%m-%d %H:%M:%S")
+                t2 = datetime.datetime.strptime(real_ts, "%Y-%m-%d %H:%M:%S")
+                diff = abs((t2 - t1).total_seconds())
+                drift_msg = f"{diff:.0f} sec"
+            except:
+                drift_msg = "N/A"
 
-# ---------------------------
-# Entrypoint
-# ---------------------------
+            info_html = [
+                html.B("Selected Time: "), target_ts, html.Br(),
+                html.B("Actual Image Time: "), real_ts, html.Br(),
+                html.B("Time Drift: "), drift_msg, html.Br(), html.Br(),
+                html.B(f"Max Temp: {f_max:.1f} °C"), html.Br(),
+                html.B(f"Avg Temp: {f_avg:.1f} °C")
+            ]
+            return fig, info_html
+        except Exception as e:
+            return go.Figure(), f"Error: {e}"
+            
+    return go.Figure(), "No raw thermal data found for this time range."
+
 if __name__ == "__main__":
     logger.info("Starting secure_sensor_dashboard...")
     if not GMAIL_EMAIL or not GMAIL_APP_PASSWORD:
