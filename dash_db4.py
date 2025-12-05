@@ -81,10 +81,10 @@ DHT_POLL_INTERVAL = float(os.getenv("DHT_POLL_INTERVAL", "2.0"))
 
 # --- SENSOR PIN CONFIGURATION ---
 # OPTION A: LIVE MODE (Uncomment these 4 lines when sensors are connected!)
-# DHT_PIN_1 = getattr(board, "D23", None) if board else None
-# DHT_PIN_2 = getattr(board, "D24", None) if board else None
-# DHT_PIN_3 = getattr(board, "D17", None) if board else None 
-# DHT_PIN_4 = getattr(board, "D27", None) if board else None 
+DHT_PIN_1 = getattr(board, "D23", None) if board else None
+DHT_PIN_2 = getattr(board, "D24", None) if board else None
+DHT_PIN_3 = getattr(board, "D17", None) if board else None 
+DHT_PIN_4 = getattr(board, "D27", None) if board else None 
 
 # OPTION B: DEMO MODE (Use this right now for speed/testing)
 DHT_PIN_1 = None
