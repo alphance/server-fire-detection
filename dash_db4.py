@@ -8,8 +8,8 @@ Features:
 - Data Aggregation (Raw, 1 min, 5 min, 10 min, Daily)
 - Time & Date Filtering
 - Side-by-Side Replay UI with Full Stats
-- FIX: Robust "Exceeded" Filtering (Ignores disconnected sensors)
-- FIX: Table Sorting Enabled
+- FIX: Visual Highlighting (Red text for breached values)
+- FIX: Filter respects "Avg/Max" mode selection
 """
 
 import os
@@ -82,16 +82,16 @@ DHT_POLL_INTERVAL = float(os.getenv("DHT_POLL_INTERVAL", "2.0"))
 
 # --- SENSOR PIN CONFIGURATION ---
 # OPTION A: LIVE MODE
-# DHT_PIN_1 = getattr(board, "D23", None) if board else None
-# DHT_PIN_2 = getattr(board, "D24", None) if board else None
-# DHT_PIN_3 = getattr(board, "D17", None) if board else None 
-# DHT_PIN_4 = getattr(board, "D27", None) if board else None 
+DHT_PIN_1 = getattr(board, "D23", None) if board else None
+DHT_PIN_2 = getattr(board, "D24", None) if board else None
+DHT_PIN_3 = getattr(board, "D17", None) if board else None 
+DHT_PIN_4 = getattr(board, "D27", None) if board else None 
 
 # OPTION B: DEMO MODE
-DHT_PIN_1 = None
-DHT_PIN_2 = None
-DHT_PIN_3 = None
-DHT_PIN_4 = None
+#DHT_PIN_1 = None
+#DHT_PIN_2 = None
+#DHT_PIN_3 = None
+#DHT_PIN_4 = None
 
 MLX_REFRESH_RATE = None
 if adafruit_mlx90640 and hasattr(adafruit_mlx90640, "RefreshRate"):
@@ -480,7 +480,7 @@ history_tab_content = html.Div([
             sort_action='native',  # ENABLE SORTING
             style_cell={'textAlign': 'center', 'minWidth': '50px', 'fontSize':'12px'},
             style_header={'backgroundColor': 'rgb(230, 230, 230)', 'fontWeight': 'bold'},
-            style_data_conditional=[{'if': {'row_index': 'odd'}, 'backgroundColor': 'rgb(248, 248, 248)'}]
+            style_data_conditional=[] # Will be populated by callback
         ),
     ]),
     
@@ -628,15 +628,16 @@ def update_dashboard(n, alert_source, view_opts, dht_temp_lim, dht_hum_min, dht_
         status_lines.append(html.Span(s_text))
     return [html.Div(status_lines)], heatmap_fig, history_fig, dht_figs[0], dht_figs[1], dht_figs[2], dht_figs[3], alert_msg
 
-@app.callback([Output('master-table', 'data'), Output('master-table', 'selected_rows')],
+@app.callback([Output('master-table', 'data'), Output('master-table', 'selected_rows'), Output('master-table', 'style_data_conditional')],
               [Input('btn-load-history', 'n_clicks')],
               [State('history-date-picker', 'start_date'), State('history-date-picker', 'end_date'),
                State('history-interval-select', 'value'), State('history-filter-select', 'value'),
                State('time-start', 'value'), State('time-end', 'value'),
                State('input-dht-temp', 'value'), State('input-dht-hum-min', 'value'),
-               State('input-dht-hum-max', 'value'), State('input-thermal-temp', 'value')])
-def load_history_data(n, start, end, interval, filter_opts, time_start, time_end, dht_limit, hum_min, hum_max, thermal_limit):
-    if n is None: return [], []
+               State('input-dht-hum-max', 'value'), State('input-thermal-temp', 'value'),
+               State('thermal-mode-select', 'value')]) # ADDED MODE SELECT
+def load_history_data(n, start, end, interval, filter_opts, time_start, time_end, dht_limit, hum_min, hum_max, thermal_limit, thermal_mode):
+    if n is None: return [], [], []
     
     conn = sqlite3.connect(DB_FILE)
     
@@ -650,7 +651,7 @@ def load_history_data(n, start, end, interval, filter_opts, time_start, time_end
     df_dht = pd.read_sql_query(query_dht, conn)
     conn.close()
     
-    if df_thermal.empty: return [], []
+    if df_thermal.empty: return [], [], []
 
     if not df_dht.empty:
         df_dht['sensor_lbl'] = 'S' + df_dht['sensor_id'].astype(str)
@@ -670,13 +671,41 @@ def load_history_data(n, start, end, interval, filter_opts, time_start, time_end
         else: df_agg['timestamp'] = df_agg['timestamp'].dt.strftime("%Y-%m-%d %H:%M:%S")
         df_final = df_agg
 
-    # FIX: Robust Filtering (Ignores Disconnected Sensors)
+    # --- CONDITIONAL STYLES (Red Text for violations) ---
+    styles = [{'if': {'row_index': 'odd'}, 'backgroundColor': 'rgb(248, 248, 248)'}]
+    
+    # 1. Thermal Style
+    if thermal_limit is not None:
+        col = 'max_temp' if thermal_mode == 'max' else 'avg_temp'
+        styles.append({
+            'if': {'filter_query': f'{{{col}}} > {thermal_limit}', 'column_id': col},
+            'color': 'red', 'fontWeight': 'bold'
+        })
+
+    # 2. DHT Temp Style
+    if dht_limit is not None:
+        for c in [col for col in df_final.columns if 'temp' in col and col.startswith('S')]:
+            styles.append({
+                'if': {'filter_query': f'{{{c}}} > {dht_limit}', 'column_id': c},
+                'color': 'red', 'fontWeight': 'bold'
+            })
+
+    # 3. DHT Humidity Style
+    if hum_min is not None and hum_max is not None:
+        for c in [col for col in df_final.columns if 'humidity' in c and col.startswith('S')]:
+            styles.append({
+                'if': {'filter_query': f'{{{c}}} < {hum_min} || {{{c}}} > {hum_max}', 'column_id': c},
+                'color': 'red', 'fontWeight': 'bold'
+            })
+
+    # --- FILTER LOGIC (Show Only Exceeded) ---
     if 'exceeded' in filter_opts:
         mask = pd.Series(False, index=df_final.index)
         
-        # Check Thermal Max (Hotspot)
+        # Check Thermal (Respecting Mode)
         if thermal_limit is not None:
-            mask |= (df_final['max_temp'] > float(thermal_limit))
+            col = 'max_temp' if thermal_mode == 'max' else 'avg_temp'
+            mask |= (df_final[col] > float(thermal_limit))
         
         # Check DHT Temps
         if dht_limit is not None:
@@ -695,7 +724,7 @@ def load_history_data(n, start, end, interval, filter_opts, time_start, time_end
         
         df_final = df_final[mask]
 
-    return df_final.round(1).to_dict('records'), []
+    return df_final.round(1).to_dict('records'), [], styles
 
 @app.callback([Output('replay-heatmap', 'figure'), Output('replay-info-panel', 'children')],
               [Input('master-table', 'selected_rows')],
