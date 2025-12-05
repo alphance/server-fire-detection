@@ -8,7 +8,7 @@ Features:
 - Data Aggregation (Raw, 1 min, 5 min, 10 min, Daily)
 - Time & Date Filtering
 - Side-by-Side Replay UI with Full Stats
-- FIX: Corrected Master Table Column IDs for Humidity
+- FIX: Robust "Exceeded" Filtering Logic
 """
 
 import os
@@ -80,13 +80,13 @@ MAX_HISTORY = 100
 DHT_POLL_INTERVAL = float(os.getenv("DHT_POLL_INTERVAL", "2.0"))
 
 # --- SENSOR PIN CONFIGURATION ---
-# OPTION A: LIVE MODE (Uncomment these 4 lines when sensors are connected!)
+# OPTION A: LIVE MODE
 DHT_PIN_1 = getattr(board, "D23", None) if board else None
 DHT_PIN_2 = getattr(board, "D24", None) if board else None
 DHT_PIN_3 = getattr(board, "D17", None) if board else None 
 DHT_PIN_4 = getattr(board, "D27", None) if board else None 
 
-# OPTION B: DEMO MODE (Use this right now for speed/testing)
+# OPTION B: DEMO MODE
 #DHT_PIN_1 = None
 #DHT_PIN_2 = None
 #DHT_PIN_3 = None
@@ -404,7 +404,7 @@ live_tab_content = html.Div([
     ])
 ])
 
-# --- HISTORY TAB (UPDATED UI) ---
+# --- HISTORY TAB ---
 history_tab_content = html.Div([
     html.H2("Historical Data Browser"),
     html.Div([
@@ -419,7 +419,6 @@ history_tab_content = html.Div([
             ),
         ], style={'display':'inline-block', 'marginRight':'20px', 'verticalAlign':'top'}),
         
-        # Time Filter Inputs
         html.Div([
             html.Label("2. Filter Time (HH:MM):", style={'fontWeight':'bold'}),
             html.Div([
@@ -482,7 +481,6 @@ history_tab_content = html.Div([
         ),
     ]),
     
-    # Side-by-Side Replay Layout
     html.Div(style={'display':'flex', 'marginTop':'20px', 'borderTop':'2px solid #ccc', 'paddingTop':'20px'}, children=[
         html.Div(style={'flex':1, 'paddingRight':'20px'}, children=[
             dcc.Graph(id='replay-heatmap', style={'height':'400px'})
@@ -668,18 +666,30 @@ def load_history_data(n, start, end, interval, filter_opts, time_start, time_end
         else: df_agg['timestamp'] = df_agg['timestamp'].dt.strftime("%Y-%m-%d %H:%M:%S")
         df_final = df_agg
 
+    # FIX: Robust Filtering Logic
     if 'exceeded' in filter_opts:
-        conditions = []
-        if thermal_limit: conditions.append(df_final['max_temp'] > thermal_limit)
-        if dht_limit:
-            for col in df_final.columns:
-                if 'temp' in col and 'S' in col: conditions.append(df_final[col] > dht_limit)
-        if hum_min and hum_max:
-            for col in df_final.columns:
-                if 'humidity' in col and 'S' in col: conditions.append((df_final[col] < hum_min) | (df_final[col] > hum_max))
-        if conditions:
-            final_mask = pd.concat(conditions, axis=1).any(axis=1)
-            df_final = df_final[final_mask]
+        mask = pd.Series(False, index=df_final.index)
+        
+        # Check Thermal Max (Hotspot)
+        if thermal_limit is not None:
+            mask |= (df_final['max_temp'] > float(thermal_limit))
+        
+        # Check DHT Temps
+        if dht_limit is not None:
+            limit = float(dht_limit)
+            temp_cols = [c for c in df_final.columns if 'temp' in c and c.startswith('S')]
+            for c in temp_cols:
+                mask |= (df_final[c] > limit)
+        
+        # Check Humidity Range
+        if hum_min is not None and hum_max is not None:
+            min_h = float(hum_min)
+            max_h = float(hum_max)
+            hum_cols = [c for c in df_final.columns if 'humidity' in c and c.startswith('S')]
+            for c in hum_cols:
+                mask |= (df_final[c] < min_h) | (df_final[c] > max_h)
+        
+        df_final = df_final[mask]
 
     return df_final.round(1).to_dict('records'), []
 
