@@ -83,16 +83,16 @@ DHT_POLL_INTERVAL = float(os.getenv("DHT_POLL_INTERVAL", "2.0"))
 
 # --- SENSOR PIN CONFIGURATION ---
 # OPTION A: LIVE MODE
-# DHT_PIN_1 = getattr(board, "D23", None) if board else None
-# DHT_PIN_2 = getattr(board, "D24", None) if board else None
-# DHT_PIN_3 = getattr(board, "D17", None) if board else None 
-# DHT_PIN_4 = getattr(board, "D27", None) if board else None 
+DHT_PIN_1 = getattr(board, "D23", None) if board else None
+DHT_PIN_2 = getattr(board, "D24", None) if board else None
+DHT_PIN_3 = getattr(board, "D17", None) if board else None 
+DHT_PIN_4 = getattr(board, "D27", None) if board else None 
 
 # OPTION B: DEMO MODE
-DHT_PIN_1 = None
-DHT_PIN_2 = None
-DHT_PIN_3 = None
-DHT_PIN_4 = None
+#DHT_PIN_1 = None
+#DHT_PIN_2 = None
+#DHT_PIN_3 = None
+#DHT_PIN_4 = None
 
 MLX_REFRESH_RATE = None
 if adafruit_mlx90640 and hasattr(adafruit_mlx90640, "RefreshRate"):
