@@ -7,7 +7,7 @@ Features:
 - History "Replay" (View past thermal images)
 - Data Aggregation (Raw, 1 min, 5 min, 10 min, Daily)
 - Time & Date Filtering (Precision lookup)
-- Side-by-Side Replay UI
+- Side-by-Side Replay UI with Full Stats (Min/Max/Avg)
 - OPTIMIZED: Zlib Compression & Rate Limiting for DB
 """
 
@@ -81,16 +81,16 @@ DHT_POLL_INTERVAL = float(os.getenv("DHT_POLL_INTERVAL", "2.0"))
 
 # --- SENSOR PIN CONFIGURATION ---
 # OPTION A: LIVE MODE (Uncomment these 4 lines when sensors are connected!)
-DHT_PIN_1 = getattr(board, "D23", None) if board else None
-DHT_PIN_2 = getattr(board, "D24", None) if board else None
-DHT_PIN_3 = getattr(board, "D17", None) if board else None 
-DHT_PIN_4 = getattr(board, "D27", None) if board else None 
+# DHT_PIN_1 = getattr(board, "D23", None) if board else None
+# DHT_PIN_2 = getattr(board, "D24", None) if board else None
+# DHT_PIN_3 = getattr(board, "D17", None) if board else None 
+# DHT_PIN_4 = getattr(board, "D27", None) if board else None 
 
 # OPTION B: DEMO MODE (Use this right now for speed/testing)
-#DHT_PIN_1 = None
-#DHT_PIN_2 = None
-#DHT_PIN_3 = None
-#DHT_PIN_4 = None
+DHT_PIN_1 = None
+DHT_PIN_2 = None
+DHT_PIN_3 = None
+DHT_PIN_4 = None
 
 MLX_REFRESH_RATE = None
 if adafruit_mlx90640 and hasattr(adafruit_mlx90640, "RefreshRate"):
@@ -419,7 +419,7 @@ history_tab_content = html.Div([
             ),
         ], style={'display':'inline-block', 'marginRight':'20px', 'verticalAlign':'top'}),
         
-        # NEW: Time Filter Inputs
+        # Time Filter Inputs
         html.Div([
             html.Label("2. Filter Time (HH:MM):", style={'fontWeight':'bold'}),
             html.Div([
@@ -466,6 +466,8 @@ history_tab_content = html.Div([
             columns=[
                 {"name": "Timestamp", "id": "timestamp"},
                 {"name": "MLX Max", "id": "max_temp"},
+                {"name": "MLX Avg", "id": "avg_temp"},
+                {"name": "MLX Min", "id": "min_temp"},
                 {"name": "S1 Temp", "id": "S1_temp"}, {"name": "S1 Hum", "id": "S1_hum"},
                 {"name": "S2 Temp", "id": "S2_temp"}, {"name": "S2 Hum", "id": "S2_hum"},
                 {"name": "S3 Temp", "id": "S3_temp"}, {"name": "S3 Hum", "id": "S3_hum"},
@@ -480,7 +482,7 @@ history_tab_content = html.Div([
         ),
     ]),
     
-    # NEW: Side-by-Side Replay Layout
+    # Side-by-Side Replay Layout
     html.Div(style={'display':'flex', 'marginTop':'20px', 'borderTop':'2px solid #ccc', 'paddingTop':'20px'}, children=[
         html.Div(style={'flex':1, 'paddingRight':'20px'}, children=[
             dcc.Graph(id='replay-heatmap', style={'height':'400px'})
@@ -636,7 +638,6 @@ def load_history_data(n, start, end, interval, filter_opts, time_start, time_end
     
     conn = sqlite3.connect(DB_FILE)
     
-    # Construct Timestamp Strings with Time Filter
     start_ts = f"{start} {time_start}:00"
     end_ts = f"{end} {time_end}:59"
 
@@ -707,11 +708,10 @@ def replay_thermal_snapshot(selected_rows, data):
             fig = go.Figure(data=[go.Heatmap(z=frame_arr, colorscale='Inferno')])
             fig.update_layout(title="Thermal Snapshot", margin=dict(l=20, r=20, t=30, b=20), yaxis=dict(autorange='reversed', scaleanchor='x'))
             
-            # Calculate stats for info panel
             f_max = np.max(frame_arr)
+            f_min = np.min(frame_arr)
             f_avg = np.mean(frame_arr)
             
-            # Calculate time difference
             try:
                 t1 = datetime.datetime.strptime(target_ts, "%Y-%m-%d %H:%M:%S")
                 t2 = datetime.datetime.strptime(real_ts, "%Y-%m-%d %H:%M:%S")
@@ -725,7 +725,8 @@ def replay_thermal_snapshot(selected_rows, data):
                 html.B("Actual Image Time: "), real_ts, html.Br(),
                 html.B("Time Drift: "), drift_msg, html.Br(), html.Br(),
                 html.B(f"Max Temp: {f_max:.1f} °C"), html.Br(),
-                html.B(f"Avg Temp: {f_avg:.1f} °C")
+                html.B(f"Avg Temp: {f_avg:.1f} °C"), html.Br(),
+                html.B(f"Min Temp: {f_min:.1f} °C")
             ]
             return fig, info_html
         except Exception as e:
