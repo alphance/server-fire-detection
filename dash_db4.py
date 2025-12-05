@@ -8,7 +8,8 @@ Features:
 - Data Aggregation (Raw, 1 min, 5 min, 10 min, Daily)
 - Time & Date Filtering
 - Side-by-Side Replay UI with Full Stats
-- FIX: Robust "Exceeded" Filtering Logic
+- FIX: Robust "Exceeded" Filtering (Ignores disconnected sensors)
+- FIX: Table Sorting Enabled
 """
 
 import os
@@ -81,16 +82,16 @@ DHT_POLL_INTERVAL = float(os.getenv("DHT_POLL_INTERVAL", "2.0"))
 
 # --- SENSOR PIN CONFIGURATION ---
 # OPTION A: LIVE MODE
-DHT_PIN_1 = getattr(board, "D23", None) if board else None
-DHT_PIN_2 = getattr(board, "D24", None) if board else None
-DHT_PIN_3 = getattr(board, "D17", None) if board else None 
-DHT_PIN_4 = getattr(board, "D27", None) if board else None 
+# DHT_PIN_1 = getattr(board, "D23", None) if board else None
+# DHT_PIN_2 = getattr(board, "D24", None) if board else None
+# DHT_PIN_3 = getattr(board, "D17", None) if board else None 
+# DHT_PIN_4 = getattr(board, "D27", None) if board else None 
 
 # OPTION B: DEMO MODE
-#DHT_PIN_1 = None
-#DHT_PIN_2 = None
-#DHT_PIN_3 = None
-#DHT_PIN_4 = None
+DHT_PIN_1 = None
+DHT_PIN_2 = None
+DHT_PIN_3 = None
+DHT_PIN_4 = None
 
 MLX_REFRESH_RATE = None
 if adafruit_mlx90640 and hasattr(adafruit_mlx90640, "RefreshRate"):
@@ -419,6 +420,7 @@ history_tab_content = html.Div([
             ),
         ], style={'display':'inline-block', 'marginRight':'20px', 'verticalAlign':'top'}),
         
+        # Time Filter Inputs
         html.Div([
             html.Label("2. Filter Time (HH:MM):", style={'fontWeight':'bold'}),
             html.Div([
@@ -475,12 +477,14 @@ history_tab_content = html.Div([
             data=[],
             page_size=12,
             row_selectable='single',
+            sort_action='native',  # ENABLE SORTING
             style_cell={'textAlign': 'center', 'minWidth': '50px', 'fontSize':'12px'},
             style_header={'backgroundColor': 'rgb(230, 230, 230)', 'fontWeight': 'bold'},
             style_data_conditional=[{'if': {'row_index': 'odd'}, 'backgroundColor': 'rgb(248, 248, 248)'}]
         ),
     ]),
     
+    # Side-by-Side Replay Layout
     html.Div(style={'display':'flex', 'marginTop':'20px', 'borderTop':'2px solid #ccc', 'paddingTop':'20px'}, children=[
         html.Div(style={'flex':1, 'paddingRight':'20px'}, children=[
             dcc.Graph(id='replay-heatmap', style={'height':'400px'})
@@ -666,7 +670,7 @@ def load_history_data(n, start, end, interval, filter_opts, time_start, time_end
         else: df_agg['timestamp'] = df_agg['timestamp'].dt.strftime("%Y-%m-%d %H:%M:%S")
         df_final = df_agg
 
-    # FIX: Robust Filtering Logic
+    # FIX: Robust Filtering (Ignores Disconnected Sensors)
     if 'exceeded' in filter_opts:
         mask = pd.Series(False, index=df_final.index)
         
@@ -679,7 +683,7 @@ def load_history_data(n, start, end, interval, filter_opts, time_start, time_end
             limit = float(dht_limit)
             temp_cols = [c for c in df_final.columns if 'temp' in c and c.startswith('S')]
             for c in temp_cols:
-                mask |= (df_final[c] > limit)
+                mask |= (df_final[c].notnull() & (df_final[c] > limit))
         
         # Check Humidity Range
         if hum_min is not None and hum_max is not None:
@@ -687,7 +691,7 @@ def load_history_data(n, start, end, interval, filter_opts, time_start, time_end
             max_h = float(hum_max)
             hum_cols = [c for c in df_final.columns if 'humidity' in c and c.startswith('S')]
             for c in hum_cols:
-                mask |= (df_final[c] < min_h) | (df_final[c] > max_h)
+                mask |= (df_final[c].notnull() & ((df_final[c] < min_h) | (df_final[c] > max_h)))
         
         df_final = df_final[mask]
 
